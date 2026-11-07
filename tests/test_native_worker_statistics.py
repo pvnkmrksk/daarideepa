@@ -249,6 +249,53 @@ const analysis=buildAnalysis(state);
     assert actual["timeAudit"]["segments"] == actual["timeAudit"]["rows"] == 0
 
 
+@pytest.mark.parametrize("explicit", [False, True], ids=["recorded-jump", "explicit-break"])
+def test_pose_break_does_not_join_paths_or_create_movement(explicit, tmp_path):
+    source = tmp_path / "reset_VR1_.csv"
+    base = pd.Timestamp("2026-01-01")
+    pd.DataFrame({
+        "Current Time": [base + pd.Timedelta(seconds=i) for i in range(6)],
+        "CurrentTrial": 0, "CurrentStep": 0,
+        "GameObjectPosX": [-12, -11, -10, 10, 11, 12],
+        "GameObjectPosZ": 0, "GameObjectRotY": 0,
+    }).to_csv(source, index=False)
+    actual = worker(f"const explicit={json.dumps(explicit)};" + """
+initDataset({header:payloadHeader, buffer:binary, bodyOffset:payloadBodyOffset});
+if (explicit) data.breakBefore=Uint8Array.of(0,0,0,1,0,0);
+const state={groupBy:'all', statsUnit:'trial', jumpThreshold:explicit ? 0 : 5,
+  jumpBufferMs:0, transitionAxis:'x', transitionSplit:0, binSize:1,
+  ringEnabled:true, rings:[{x:0,z:0,r:.5}],
+  windows:[{xmin:-20,xmax:20,zmin:-1,zmax:1},{xmin:30,xmax:40,zmin:-1,zmax:1}]};
+selectCoordinateFrame(state);
+const analysis=buildAnalysis(state);
+const paths=buildTrajectory(state,analysis);
+const transitions=buildTransition(state,analysis);
+const heading=buildHeading(state,analysis);
+const metrics=buildMetrics(state,analysis);
+({segments:analysis.visibleSegments.length, vertices:paths.vertices, movement:analysis.movement,
+  heading:heading.vertices, distance:metrics.distance, displacement:metrics.displacement,
+  windows:buildWindows(state,analysis).summaries.map(row=>row.distance),
+  longDisplacement:buildAnalysis({...state,minDisplacement:10}).visibleSegments.length,
+  crossed:transitions.crossed.reduce((sum,value)=>sum+value,0),
+  ended:transitions.ended.reduce((sum,value)=>sum+value,0),
+  curtain:applyCurtain(state,analysis).visibleSegments.length});
+""", load_native_dataset(str(source)).binary)
+    assert actual["segments"] == 1
+    assert actual["vertices"] == [
+        -12, 0, -11, 0, -11, 0, -10, 0,
+        *([10, 0, 11, 0] if explicit else []), 11, 0, 12, 0,
+    ]
+    assert actual["movement"] == [None, 90, 90, None, 90, 90]
+    assert actual["heading"] == [
+        0, 0, 1, 0, 1, 0, 2, 0,
+        *([3, 0, 4, 0] if explicit else []), 4, 0, 5, 0,
+    ]
+    distance = 4 if explicit else 3
+    assert actual["distance"] == actual["displacement"] == [distance]
+    assert actual["windows"] == [distance, 0]
+    assert actual["crossed"] == actual["ended"] == actual["curtain"] == actual["longDisplacement"] == 0
+
+
 def test_roi_panel_denominators_survive_reordering_and_duplicate_labels(choice_binary):
     actual = worker(CHOICE_INIT + """
 state.groupBy='config';

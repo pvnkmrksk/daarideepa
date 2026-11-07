@@ -7,6 +7,13 @@ import {
   EChartsRoiRenderer, EChartsHistogramRenderer,
 } from "/static/echarts_renderers.js";
 
+import {LiveWindow} from "/static/live_dataset.js";
+import {mountLiveControls} from "/static/live.js";
+
+const liveMode = location.pathname === "/live/";
+let liveViewFixed = false;
+let liveUnitsFixed = false;
+let recipeViewportPending = false;
 const byId = id => document.getElementById(id);
 const shell = byId("app-shell");
 const statusDock = byId("status-dock");
@@ -82,6 +89,11 @@ function syncView(view, source) {
   for (const renderer of spatialRenderers) if (renderer !== source && renderer.data) renderer.setView(sharedView, false);
 }
 
+function handleSpatialViewChange(view, source) {
+  if (liveMode) liveViewFixed = true;
+  syncView(view, source);
+}
+
 let trajectoryRenderer;
 let heatmapRenderer;
 let directionRenderer;
@@ -94,16 +106,16 @@ let displacementHistogram;
 let transitionRenderer;
 
 try {
-  trajectoryRenderer = new TrajectoryRenderer(byId("trajectory-plot"), syncView);
-  heatmapRenderer = new HeatmapRenderer(byId("heatmap-plot"), syncView);
-  directionRenderer = new DirectionRenderer(byId("direction-plot"), syncView);
+  trajectoryRenderer = new TrajectoryRenderer(byId("trajectory-plot"), handleSpatialViewChange);
+  heatmapRenderer = new HeatmapRenderer(byId("heatmap-plot"), handleSpatialViewChange);
+  directionRenderer = new DirectionRenderer(byId("direction-plot"), handleSpatialViewChange);
   polarRenderer = new EChartsPolarRenderer(byId("polar-plot"));
   headingRenderer = new EChartsHeadingRenderer(byId("heading-plot"));
   metricsRenderer = new EChartsMetricsRenderer(byId("metrics-plot"));
   roiRenderer = new EChartsRoiRenderer(byId("roi-plot"));
   velocityHistogram = new EChartsHistogramRenderer(byId("velocity-hist"), "velocity-distribution");
   displacementHistogram = new EChartsHistogramRenderer(byId("displacement-hist"), "displacement-distribution");
-  transitionRenderer = new TransitionRenderer(byId("transition-plot"), syncView);
+  transitionRenderer = new TransitionRenderer(byId("transition-plot"), handleSpatialViewChange);
 } catch (error) {
   setStatus("error", "Renderer unavailable", error.message);
   throw error;
@@ -201,7 +213,7 @@ function datasetSummary(visible = null) {
     <div><b>${formatCount(rows)}</b><span>visible / ${formatCount(counts.retainedRows)} rows</span></div>
     <div><b>${formatCount(segments)}</b><span>visible / ${formatCount(counts.segments)} segments</span></div>
     <div><b>${formatCount(counts.animals)}</b><span>animals</span></div>
-    <div><b>${formatCount(counts.files)}</b><span>files${counts.duplicateFilesSkipped ? ` · ${formatCount(counts.duplicateFilesSkipped)} duplicate copies skipped` : ""}${counts.unsupportedFilesSkipped ? ` · ${formatCount(counts.unsupportedFilesSkipped)} non-trajectory CSVs skipped` : ""}</span></div>`;
+    <div><b>${liveMode ? "Live" : formatCount(counts.files)}</b><span>${liveMode ? "observation window" : "files"}${counts.duplicateFilesSkipped ? ` · ${formatCount(counts.duplicateFilesSkipped)} duplicate copies skipped` : ""}${counts.unsupportedFilesSkipped ? ` · ${formatCount(counts.unsupportedFilesSkipped)} non-trajectory CSVs skipped` : ""}</span></div>`;
 }
 
 function renderFilterAudit(audit = []) {
@@ -315,14 +327,24 @@ function createRangeControl(key, label, idMin, idMax) {
       <input class="range-high" type="range" min="${display[0]}" max="${display[1]}" step="${step}" value="${display[1]}" aria-label="${label} upper bound">
     </div>
     <div class="range-values">
-      <label>Minimum<input id="${idMin}" type="number" step="${inputStep}" value="${shownExact[0]}"></label>
-      <label>Maximum<input id="${idMax}" type="number" step="${inputStep}" value="${shownExact[1]}"></label>
+      <label>Minimum<input id="${idMin}" type="number" step="${inputStep}" value="${liveMode ? "" : shownExact[0]}" placeholder="${shownExact[0]}"></label>
+      <label>Maximum<input id="${idMax}" type="number" step="${inputStep}" value="${liveMode ? "" : shownExact[1]}" placeholder="${shownExact[1]}"></label>
     </div>`;
   byId("range-filters").appendChild(host);
   const canvas = host.querySelector("canvas"), low = host.querySelector(".range-low"), high = host.querySelector(".range-high");
   const distributionNote = host.querySelector(".range-filter-head small");
   const loInput = byId(idMin), hiInput = byId(idMax);
-  const redraw = () => drawMiniHistogram(canvas, histogram, [Number(loInput.value), Number(hiInput.value)]);
+  const redraw = () => drawMiniHistogram(canvas, histogram, rangeValue(idMin, idMax, histogram.range));
+  const updateRange = next => {
+    if (!liveMode) return;
+    histogram = {...histogram, ...next};
+    for (const [slider, input, index] of [[low, loInput, 0], [high, hiInput, 1]]) {
+      slider.min = histogram.displayRange[0]; slider.max = histogram.displayRange[1];
+      slider.step = integer ? 1 : Math.max(1e-6, (Number(slider.max) - Number(slider.min)) / 500);
+      slider.value = input.value || (index === 0 ? slider.min : slider.max);
+      input.placeholder = displayRangeBound(histogram.range[index], integer, index === 1);
+    }
+  };
   const fromSlider = changed => {
     if (Number(low.value) > Number(high.value)) {
       if (changed === low) high.value = low.value; else low.value = high.value;
@@ -347,7 +369,7 @@ function createRangeControl(key, label, idMin, idMax) {
     distributionNote.textContent = `${formatCount(next.visible)} in current AND subset${next.overflow ? ` · ${formatCount(next.overflow)} above chart` : ""}`;
     redraw();
   };
-  rangeControls.set(key, {host, redraw, setHistogram, low, high, loInput, hiInput});
+  rangeControls.set(key, {host, redraw, setHistogram, low, high, loInput, hiInput, updateRange});
 }
 
 function loadDisplayNames() {
@@ -530,19 +552,7 @@ function renderMirrorPairs() {
   syncMirrorAvailability();
 }
 
-function populateControls(restoreUrl = false) {
-  datasetSummary();
-  loadDisplayNames();
-  const mirrorPairs = Object.values(datasetHeader.configPresentation || {})
-    .filter(config => config?.poolable).length / 2;
-  if (!restoreUrl) {
-    mirrorRules = [];
-    mirrorAxis = "x"; mirrorCoordinate = 0;
-    if (!loadMirrorPreferences()) mirrorRules = inferredMirrorRules();
-  } else if (!mirrorRules.length) mirrorRules = inferredMirrorRules();
-  byId("mirror-pool").closest("label").title = mirrorPairs >= 1
-    ? `${formatCount(mirrorPairs)} mirrored left/right treatment pair${mirrorPairs === 1 ? "" : "s"} detected. The pairing editor also works with Scene, VR arena, Animal, or Source folder panels.`
-    : "Open Mirror pairing to match values from the current categorical panel split.";
+function populateCategories() {
   const categories = byId("category-filters");
   categories.replaceChildren();
   const labels = {config: "Treatments", scene: "Scenes", vr: "VR arenas", fly: "Animals", folder: "Source folders"};
@@ -573,6 +583,22 @@ function populateControls(restoreUrl = false) {
       scheduleDataUpdate(80);
     });
   }
+}
+
+function populateControls(restoreUrl = false) {
+  datasetSummary();
+  loadDisplayNames();
+  const mirrorPairs = Object.values(datasetHeader.configPresentation || {})
+    .filter(config => config?.poolable).length / 2;
+  if (!restoreUrl) {
+    mirrorRules = [];
+    mirrorAxis = "x"; mirrorCoordinate = 0;
+    if (!loadMirrorPreferences()) mirrorRules = inferredMirrorRules();
+  } else if (!mirrorRules.length) mirrorRules = inferredMirrorRules();
+  byId("mirror-pool").closest("label").title = mirrorPairs >= 1
+    ? `${formatCount(mirrorPairs)} mirrored left/right treatment pair${mirrorPairs === 1 ? "" : "s"} detected. The pairing editor also works with Scene, VR arena, Animal, or Source folder panels.`
+    : "Open Mirror pairing to match values from the current categorical panel split.";
+  populateCategories();
   byId("range-filters").replaceChildren(); rangeControls.clear();
   createRangeControl("trial", "Trial number", "trial-min", "trial-max");
   createRangeControl("step", "Step / segment", "step-min", "step-max");
@@ -618,7 +644,8 @@ function numberValue(id, fallback = 0) {
 }
 
 function rangeValue(minId, maxId, fallback) {
-  let lo = numberValue(minId, fallback[0]), hi = numberValue(maxId, fallback[1]);
+  let lo = liveMode && byId(minId)?.value === "" ? fallback[0] : numberValue(minId, fallback[0]);
+  let hi = liveMode && byId(maxId)?.value === "" ? fallback[1] : numberValue(maxId, fallback[1]);
   if (lo > hi) [lo, hi] = [hi, lo];
   return [lo, hi];
 }
@@ -637,7 +664,7 @@ function collectState() {
   const ranges = datasetHeader.ranges;
   return {
     filters: Object.fromEntries(["config", "scene", "vr", "fly", "folder"].map(key => [key, selectedCodes(key)])),
-    ranges: {
+    ranges: liveMode ? liveRangeFilters() : {
       trial: rangeValue("trial-min", "trial-max", ranges.trial),
       step: rangeValue("step-min", "step-max", ranges.step),
       replicate: rangeValue("replicate-min", "replicate-max", ranges.replicate),
@@ -702,7 +729,7 @@ function persistState() {
   const state = collectState();
   const url = new URL(location.href);
   const params = url.searchParams;
-  params.set("source", datasetHeader.pattern);
+  if (liveMode) params.delete("source"); else params.set("source", datasetHeader.pattern);
   params.set("group", state.groupBy); params.set("color", state.colorBy);
   if (state.mirrorPool) params.set("mirror", "1"); else params.delete("mirror");
   if (state.mirrorRules.length) params.set("mirrorRules", JSON.stringify(state.mirrorRules)); else params.delete("mirrorRules");
@@ -714,8 +741,12 @@ function persistState() {
   params.set("pmode", state.polarMode);
   params.set("pcap", state.playbackPercentile);
   params.set("pscope", byId("playback-scope").value);
-  params.set("uscale", byId("unit-scale").value);
-  params.set("uname", byId("unit-name").value);
+  if (!liveMode || liveUnitsFixed) {
+    params.set("uscale", byId("unit-scale").value);
+    params.set("uname", byId("unit-name").value);
+  } else {
+    params.delete("uscale"); params.delete("uname");
+  }
   params.set("figw", byId("fig-panel-width").value);
   params.set("figh", byId("fig-panel-height").value);
   params.set("pheight", byId("plot-host-height").value);
@@ -727,8 +758,16 @@ function persistState() {
   params.set("overview", state.overviewGrouping);
   if (Object.keys(panelOrders).length) params.set("order", JSON.stringify(panelOrders));
   else params.delete("order");
-  params.set("filters", JSON.stringify(state.filters));
-  params.set("ranges", JSON.stringify(state.ranges));
+  if (liveMode) {
+    const selected = Object.fromEntries(Object.entries(state.filters).filter(([key, codes]) =>
+      codes.length !== datasetHeader.categories[key].length).map(([key, codes]) =>
+      [key, codes.map(code => datasetHeader.categories[key][code]).filter(Boolean)]));
+    params.set("liveFilters", JSON.stringify(selected));
+    params.set("ranges", JSON.stringify(liveRanges()));
+  } else {
+    params.set("filters", JSON.stringify(state.filters));
+    params.set("ranges", JSON.stringify(state.ranges));
+  }
   params.set("quality", JSON.stringify({
     jumpThreshold: state.jumpThreshold, jumpBufferMs: state.jumpBufferMs,
     minDisplacement: state.minDisplacement, edgeTrim: state.edgeTrim,
@@ -786,6 +825,7 @@ function restoreViewStateFromUrl() {
     "transition-outcome": params.get("toutcome"), "transition-display": params.get("tdisplay"),
     "transition-support": params.get("tsupport"),
   };
+  if (liveMode) liveUnitsFixed = params.has("uscale") || params.has("uname");
   for (const [id, value] of Object.entries(values)) if (value !== null && byId(id)) byId(id).value = value;
   syncAngleSourceControls(byId("angle-source").value);
   byId("mirror-pool").checked = params.get("mirror") === "1" && !byId("mirror-pool").disabled;
@@ -815,10 +855,12 @@ function restoreViewStateFromUrl() {
     }
   } catch (_) { /* malformed optional observation windows are ignored */ }
   try {
-    const filters = JSON.parse(params.get("filters") || "{}");
+    const filters = JSON.parse(params.get(liveMode ? "liveFilters" : "filters") || "{}");
     for (const [key, selected] of Object.entries(filters)) {
       if (!byId(`filter-${key}`) || !Array.isArray(selected)) continue;
-      setFilterSelection(key, selected, false);
+      setFilterSelection(key, liveMode
+        ? selected.map(label => datasetHeader.categories[key].indexOf(label)).filter(code => code >= 0)
+        : selected, false);
     }
   } catch (_) { /* malformed optional URL state is ignored */ }
   try {
@@ -832,8 +874,8 @@ function restoreViewStateFromUrl() {
     for (const [key, valuesForRange] of Object.entries(ranges)) {
       if (!ids[key] || !Array.isArray(valuesForRange)) continue;
       const integer = key === "trial" || key === "step" || key === "replicate";
-      byId(ids[key][0]).value = displayRangeBound(valuesForRange[0], integer, false);
-      byId(ids[key][1]).value = displayRangeBound(valuesForRange[1], integer, true);
+      if (valuesForRange[0] != null) byId(ids[key][0]).value = displayRangeBound(valuesForRange[0], integer, false);
+      if (valuesForRange[1] != null) byId(ids[key][1]).value = displayRangeBound(valuesForRange[1], integer, true);
       const control = rangeControls.get(key);
       if (control) { control.low.value = valuesForRange[0]; control.high.value = valuesForRange[1]; control.redraw(); }
     }
@@ -953,8 +995,8 @@ function scheduleDataUpdate(delay = 0) {
 function queueCompute(scope, extra = {}) {
   const requestId = ++latestRequest;
   pendingCompute = {type: "compute", requestId, state: collectState(), scope, ...extra};
-  persistState();
-  if (!extra.quiet) setStatus("working", scope === "full" ? "Updating analysis" : "Refreshing view", "The retained table is running in a browser worker; the page remains interactive.");
+  if (!extra.liveRefresh) persistState();
+  if (!extra.quiet && !extra.liveRefresh) setStatus("working", scope === "full" ? "Updating analysis" : "Refreshing view", "The retained table is running in a browser worker; the page remains interactive.");
   flushCompute();
   return requestId;
 }
@@ -1301,26 +1343,29 @@ function renderProducts(incoming, summary, quiet = false) {
     updatePlaybackLimit(summary.durationSummary);
     if (summary.panelKeys) renderPanelOrder(summary.panelKeys);
   }
-  const preserve = !newDataset && !!sharedView;
+  const preserve = !!sharedView && (recipeViewportPending || (liveMode ? liveViewFixed : !newDataset));
   if (incoming.trajectory) {
     incoming.trajectory.columns = numberValue("panel-columns");
     trajectoryRenderer.setData(incoming.trajectory, preserve);
     trajectoryRenderer.setLineStyle(numberValue("trajectory-width", 1.1), numberValue("trajectory-opacity", .5));
     trajectoryRenderer.setObservationWindows(byId("window-show").checked ? observationWindows() : []);
     updatePlaybackScope();
-    if (!preserve) sharedView = {...trajectoryRenderer.view};
+    if (preserve) trajectoryRenderer.setView(sharedView, false);
+    else sharedView = {...trajectoryRenderer.view};
     syncView(sharedView, trajectoryRenderer);
     updateTrajectorySummary(applyLocalRingObserver(false));
   }
   if (incoming.heatmap) {
     incoming.heatmap.columns = numberValue("panel-columns");
-    heatmapRenderer.setData(incoming.heatmap, !!sharedView);
+    heatmapRenderer.setData(incoming.heatmap, liveMode ? preserve || !!incoming.trajectory : !!sharedView);
+    if (liveMode && !preserve && !incoming.trajectory) syncView(heatmapRenderer.view, heatmapRenderer);
     applyHeatmapVisuals();
     if (sharedView) heatmapRenderer.setView(sharedView, false);
   }
   if (incoming.direction) {
     incoming.direction.columns = numberValue("panel-columns");
-    directionRenderer.setData(incoming.direction, !!sharedView);
+    directionRenderer.setData(incoming.direction, liveMode ? preserve || !!incoming.trajectory || !!incoming.heatmap : !!sharedView);
+    if (liveMode && !preserve && !incoming.trajectory && !incoming.heatmap) syncView(directionRenderer.view, directionRenderer);
     applyDirectionVisuals();
     if (sharedView) directionRenderer.setView(sharedView, false);
   }
@@ -1352,7 +1397,8 @@ function renderProducts(incoming, summary, quiet = false) {
   if (incoming.windows) renderWindows(incoming.windows);
   if (incoming.transition) {
     incoming.transition.columns = numberValue("panel-columns");
-    transitionRenderer.setData(incoming.transition, !!sharedView);
+    transitionRenderer.setData(incoming.transition, liveMode ? preserve : !!sharedView);
+    if (liveMode && !preserve) syncView(transitionRenderer.view, transitionRenderer);
     transitionRenderer.clearTrajectoryOverlay(); transitionSelectionActive = false;
     applyTransitionVisuals();
     if (sharedView) transitionRenderer.setView(sharedView, false);
@@ -1378,6 +1424,7 @@ function renderProducts(incoming, summary, quiet = false) {
   for (const renderer of spatialRenderers) renderer.setMarginalsVisible(byId("show-marginals").checked);
   updatePanelGridSizing();
   requestAnimationFrame(() => requestAnimationFrame(updatePanelGridSizing));
+  if (incoming.trajectory || incoming.heatmap || incoming.direction || incoming.transition) recipeViewportPending = false;
   newDataset = false;
 }
 
@@ -1385,6 +1432,10 @@ function handleWorkerMessage(event) {
   const message = event.data;
   if (message.type === "ready") {
     workerReady = true;
+    if (message.live) {
+      queueCompute(scopeForCurrentView(), {liveRefresh: true});
+      return;
+    }
     applyButton.disabled = false;
     setStatus("working", "Preparing visible view", "The current layer is calculated first; other analyses refresh after the interface is idle.");
     scheduleDataUpdate(0);
@@ -1395,7 +1446,7 @@ function handleWorkerMessage(event) {
     if (message.requestId === latestRequest) {
       displayedRequest = message.requestId;
       renderProducts(message.products, message.summary, message.quiet);
-      if (!message.quiet) setStatus("ready", "Ready for exploration", `${formatCount(message.summary.visibleRows)} points · ${formatCount(message.summary.visibleSegments)} segments · worker filter ${message.summary.filterMs.toFixed(0)} ms`);
+      if (!message.quiet && !liveMode) setStatus("ready", "Ready for exploration", `${formatCount(message.summary.visibleRows)} points · ${formatCount(message.summary.visibleSegments)} segments · worker filter ${message.summary.filterMs.toFixed(0)} ms`);
       if (message.requestId === reportRequestId) {
         reportRequestId = null;
         void captureNativeReport();
@@ -1439,6 +1490,7 @@ function handleWorkerMessage(event) {
 }
 
 async function loadDataset(source) {
+  if (liveMode) return;
   source = String(source || "").trim();
   if (!source) { setStatus("error", "A data source is required", "Enter a CSV, folder, or recursive glob."); return; }
   stopPlayback(true);
@@ -1479,7 +1531,7 @@ async function loadDataset(source) {
     datasetHeader = parsed.header; sourceInput.value = source;
     byId("source-popover").open = false;
     visibleSegmentOptions = []; currentDurationSummary = datasetHeader.playbackQuantiles || null;
-    populateControls(restoreUrl); products = {}; sharedView = null; newDataset = true; sampleSeed = 0;
+    populateControls(restoreUrl); products = {}; sharedView = null; recipeViewportPending = false; newDataset = true; sampleSeed = 0;
     if (worker) worker.terminate();
     workerReady = false; workerBusy = false; pendingCompute = null;
     worker = new Worker("/static/worker.js");
@@ -1714,7 +1766,7 @@ function setDashboardView(view, save = true) {
     heading: "heading", metrics: "metrics", statistics: "statistics",
     diagnostics: "diagnostics",
   }[currentView];
-  if (datasetHeader && (currentView === "compare" || previousView === "compare"
+  if (datasetHeader && (liveMode || currentView === "compare" || previousView === "compare"
       || !products[productForView])) scheduleCompute(scopeForCurrentView(), 0);
   requestAnimationFrame(() => requestAnimationFrame(() => {
     updatePanelGridSizing();
@@ -1793,6 +1845,37 @@ const recipeVisualIds = [
   "transition-path-width", "transition-path-opacity",
 ];
 
+const rangeIds = {
+    trial:["trial-min","trial-max"], step:["step-min","step-max"],
+    replicate:["replicate-min","replicate-max"], time:["time-min","time-max"],
+    resultant:["resultant-min","resultant-max"], peak:["peak-min","peak-max"],
+    displacement:["disp-min","disp-max"], distance:["distance-min","distance-max"],
+  };
+
+function liveRanges() {
+  return Object.fromEntries(Object.entries(rangeIds).map(([key, ids]) => [key,
+    ids.map(id => byId(id)?.value ? Number(byId(id).value) : null)]));
+}
+
+function liveRangeFilters() {
+  return Object.fromEntries(Object.entries(liveRanges()).map(([key, [lo, hi]]) => [
+    key, lo == null && hi == null ? null
+      : lo != null && hi != null && lo > hi ? [hi, lo] : [lo ?? -Infinity, hi ?? Infinity],
+  ]));
+}
+
+function remapCategoryCodes(previous) {
+  const code = (key, index) => datasetHeader.categories[key]?.indexOf(previous[key]?.[index]) ?? -1;
+  mirrorRules = mirrorRules.map(rule => {
+    const key = rule.groupBy || "config";
+    return {...rule, reference: code(key, rule.reference), reflected: code(key, rule.reflected)};
+  }).filter(rule => rule.reference >= 0 && rule.reflected >= 0);
+  panelOrders = Object.fromEntries(Object.entries(panelOrders).filter(([, values]) => Array.isArray(values))
+    .map(([key, values]) => [key, JSON.stringify(previous[key]) === JSON.stringify(datasetHeader.categories[key])
+      && !key.startsWith("mirror:") && key !== "mirrorConfig" ? values
+      : values.map(index => code(key, index)).filter(index => index >= 0)]));
+}
+
 function currentRecipe() {
   const state = collectState();
   return {
@@ -1802,6 +1885,16 @@ function currentRecipe() {
       key, codes.map(code => datasetHeader?.categories?.[key]?.[code]).filter(Boolean),
     ])),
     state,
+    viewport: sharedView ? {...sharedView} : null,
+    categoryLabels: Object.fromEntries(["config", "scene", "vr", "fly", "folder", "mirrorConfig"]
+      .map(key => [key, datasetHeader?.categories?.[key] || []])),
+    openRanges: liveMode ? liveRanges() : Object.fromEntries(Object.entries(state.ranges).map(([key, limits]) => [
+      key, limits.map((value, index) => {
+        const range = datasetHeader?.filterHistograms?.[key]?.range;
+        const integer = key === "trial" || key === "step" || key === "replicate";
+        return range && value === displayRangeBound(range[index], integer, index === 1) ? null : value;
+      }),
+    ])),
     targetFrame: {
       convention: "Unity left-handed X/Z; negative X is left, positive X is right",
       mirroredPoolTransform: mirrorAxis === "x"
@@ -1809,6 +1902,7 @@ function currentRecipe() {
         : `Z → ${formatNumber(2 * mirrorCoordinate, 1)} − Z; orientation and movement heading → 180° − angle; X and time unchanged`,
       pairingAxis: mirrorGroupKey(),
       configs: datasetHeader?.configPresentation || {},
+      targetsByTreatment: datasetHeader?.rois || {},
     },
     visuals: Object.fromEntries(recipeVisualIds.map(id => [id, byId(id).value])),
   };
@@ -1823,27 +1917,33 @@ function captureRecipe() {
 
 function applyRecipeControls(recipe) {
   const state = recipe?.state || {};
+  const viewport = recipe.viewport;
+  if (viewport && ["xmin", "xmax", "zmin", "zmax"].every(key => Number.isFinite(viewport[key]))
+      && viewport.xmin < viewport.xmax && viewport.zmin < viewport.zmax) {
+    liveViewFixed = liveMode;
+    recipeViewportPending = true;
+    syncView(viewport);
+  }
   const filterCodes = state.filters || {};
   for (const key of ["config", "scene", "vr", "fly", "folder"]) {
     if (!byId(`filter-${key}`)) continue;
     let selected = Array.isArray(filterCodes[key]) ? filterCodes[key].map(Number) : [];
     const labels = recipe.filtersByLabel?.[key];
     if (Array.isArray(labels)) selected = labels.map(label => datasetHeader.categories[key].indexOf(label)).filter(code => code >= 0);
-    setFilterSelection(key, selected);
+    setFilterSelection(key, selected, recipe.source !== datasetHeader.pattern || filterCodes[key]?.[0] !== -1);
   }
-  const rangeIds = {
-    trial:["trial-min","trial-max"], step:["step-min","step-max"],
-    replicate:["replicate-min","replicate-max"], time:["time-min","time-max"],
-    resultant:["resultant-min","resultant-max"], peak:["peak-min","peak-max"],
-    displacement:["disp-min","disp-max"], distance:["distance-min","distance-max"],
-  };
   for (const [key, ids] of Object.entries(rangeIds)) {
-    const values = state.ranges?.[key]; if (!Array.isArray(values)) continue;
+    const values = liveMode ? recipe.openRanges?.[key] ?? state.ranges?.[key]
+      : recipe.source === "MATREX live" ? recipe.openRanges?.[key] : state.ranges?.[key];
+    if (!Array.isArray(values)) continue;
+    if (liveMode && !recipe.openRanges && recipe.source !== datasetHeader.pattern && !recipe.categoryLabels) continue;
     const integer = key === "trial" || key === "step" || key === "replicate";
-    byId(ids[0]).value = displayRangeBound(values[0], integer, false);
-    byId(ids[1]).value = displayRangeBound(values[1], integer, true);
+    for (const [index, id] of ids.entries()) {
+      if (values[index] == null) { if (liveMode) byId(id).value = ""; }
+      else byId(id).value = displayRangeBound(values[index], integer, index === 1);
+    }
     const control = rangeControls.get(key);
-    if (control) { control.low.value = values[0]; control.high.value = values[1]; control.redraw(); }
+    if (control) { control.low.value = values[0] ?? control.low.min; control.high.value = values[1] ?? control.high.max; control.redraw(); }
   }
   const valueIds = {
     jumpThreshold:"jump-threshold", jumpBufferMs:"jump-buffer",
@@ -1865,7 +1965,10 @@ function applyRecipeControls(recipe) {
   if (state.gridOrigin != null) byId("grid-center-origin").checked = state.gridOrigin !== "edge";
   if (Array.isArray(state.polarR)) { byId("polar-r-min").value = state.polarR[0]; byId("polar-r-max").value = state.polarR[1]; }
   if (state.labels && typeof state.labels === "object") {
-    displayNames = structuredClone(state.labels);
+    const categories = recipe.categoryLabels;
+    displayNames = categories ? Object.fromEntries(Object.entries(datasetHeader.categories).map(([key, labels]) => [
+      key, labels.map(label => state.labels[key]?.[categories[key]?.indexOf(label)] || label),
+    ])) : structuredClone(state.labels);
     for (const key of ["config", "scene", "vr", "fly", "folder"]) {
       const choices = filterChoices(key);
       for (let index = 0; index < choices.length; index += 1) {
@@ -1877,6 +1980,7 @@ function applyRecipeControls(recipe) {
   panelOrders = state.panelOrders && typeof state.panelOrders === "object" ? structuredClone(state.panelOrders) : panelOrders;
   if (Array.isArray(state.mirrorRules)) mirrorRules = structuredClone(state.mirrorRules)
     .map(rule => ({...rule, groupBy: rule.groupBy || "config"}));
+  if (recipe.categoryLabels) remapCategoryCodes(recipe.categoryLabels);
   mirrorAxis = state.mirrorAxis === "z" ? "z" : (byId("mirror-axis").value === "z" ? "z" : "x");
   mirrorCoordinate = Number(state.mirrorCoordinate ?? byId("mirror-coordinate").value) || 0;
   if (Array.isArray(state.rings)) rings = state.rings.map(ring => ({x:Number(ring.x)||0,z:Number(ring.z)||0,r:Math.max(.01,Number(ring.r)||.01)}));
@@ -1885,6 +1989,7 @@ function applyRecipeControls(recipe) {
     for (const bound of ["xmin", "xmax", "zmin", "zmax"]) if (window?.[bound] != null) byId(`window-${key}-${bound}`).value = window[bound];
   }
   sampleSeed = Number(state.sampleSeed) || 0;
+  if (liveMode && (recipe.visuals?.["unit-scale"] != null || recipe.visuals?.["unit-name"] != null)) liveUnitsFixed = true;
   for (const [id, value] of Object.entries(recipe.visuals || {})) if (byId(id) && value != null) byId(id).value = value;
   setDashboardView(state.view || state.lens || "trajectory", false);
   renderRingControls(); renderMirrorPairs();
@@ -1902,9 +2007,18 @@ async function applyRecipe() {
   try {
     const recipe = JSON.parse(byId("recipe-json").value);
     if (!recipe || recipe.schema !== "daari-deepa-view/v1") throw new Error("Expected a daari-deepa-view/v1 recipe.");
+    if (liveMode) {
+      liveRecipeTargets = readRecipeTargets(recipe.targetFrame?.targetsByTreatment);
+      liveWindow.revision += 1;
+      if (!datasetHeader) {
+        pendingLiveRecipe = recipe;
+        setStatus("ready", "View recipe queued", "The viewport and controls will be applied when telemetry arrives.");
+        return;
+      }
+    }
     const requestedSource = String(recipe.source || "").trim();
-    if (requestedSource && requestedSource !== datasetHeader?.pattern) await loadDataset(requestedSource);
-    if (!worker || requestedSource && requestedSource !== datasetHeader?.pattern) throw new Error("Load the recipe's source successfully before applying its controls.");
+    if (!liveMode && requestedSource && requestedSource !== "MATREX live" && requestedSource !== datasetHeader?.pattern) await loadDataset(requestedSource);
+    if (!worker || (!liveMode && requestedSource && requestedSource !== "MATREX live" && requestedSource !== datasetHeader?.pattern)) throw new Error("Load the recipe's source successfully before applying its controls.");
     applyRecipeControls(recipe);
     if (workerReady) scheduleDataUpdate(0);
     setStatus("ready", "View recipe applied", "The source, subsets, ordering, labels, analysis gates, and visual settings were restored.");
@@ -2293,7 +2407,13 @@ byId("curtain-toggle").addEventListener("click", () => setCurtainPalette(byId("c
 byId("curtain-center").addEventListener("click", () => setCurtainPalette(true));
 byId("curtain-close").addEventListener("click", () => setCurtainPalette(false));
 applyButton.addEventListener("click", () => scheduleDataUpdate(0));
-resetViewButton.addEventListener("click", () => trajectoryRenderer.resetView(true));
+resetViewButton.addEventListener("click", () => {
+  const renderer = spatialRenderers.find(item => item.data && item.host.closest(".lens-panel")?.classList.contains("active"))
+    || spatialRenderers.find(item => item.data) || trajectoryRenderer;
+  renderer.resetView(true);
+  if (liveMode) liveViewFixed = false;
+  recipeViewportPending = false;
+});
 function setCleanMode(enabled) {
   shell.classList.toggle("clean-mode", enabled);
   byId("clean-button").textContent = shell.classList.contains("clean-mode") ? "Full view" : "Clean view";
@@ -2542,8 +2662,14 @@ for (const id of ["angle-source", "polar-angle-source"]) {
 syncAngleSourceControls(byId("angle-source").value);
 
 for (const id of ["unit-scale", "unit-name"]) {
-  byId(id).addEventListener("change", () => { applyDisplayUnits(true); persistState(); });
-  byId(id).addEventListener("input", () => applyDisplayUnits(true));
+  byId(id).addEventListener("change", () => {
+    if (liveMode) liveUnitsFixed = true;
+    applyDisplayUnits(true); persistState();
+  });
+  byId(id).addEventListener("input", () => {
+    if (liveMode) liveUnitsFixed = true;
+    applyDisplayUnits(true);
+  });
 }
 for (const id of ["fig-panel-width", "fig-panel-height"]) {
   byId(id).addEventListener("change", () => persistState());
@@ -2629,11 +2755,11 @@ async function droppedPaths(transfer) {
 let dragDepth = 0;
 const dropOverlay = byId("drop-overlay");
 window.addEventListener("dragenter", event => {
-  if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+  if (liveMode || ![...(event.dataTransfer?.types || [])].includes("Files")) return;
   event.preventDefault(); dragDepth += 1; dropOverlay.hidden = false;
 });
 window.addEventListener("dragover", event => {
-  if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+  if (liveMode || ![...(event.dataTransfer?.types || [])].includes("Files")) return;
   event.preventDefault(); event.dataTransfer.dropEffect = "copy"; dropOverlay.hidden = false;
 });
 window.addEventListener("dragleave", event => {
@@ -2641,6 +2767,7 @@ window.addEventListener("dragleave", event => {
   if (!dragDepth) dropOverlay.hidden = true;
 });
 window.addEventListener("drop", async event => {
+  if (liveMode) return;
   event.preventDefault(); dragDepth = 0; dropOverlay.hidden = true;
   try {
     const files = await droppedPaths(event.dataTransfer);
@@ -2660,8 +2787,151 @@ window.addEventListener("drop", async event => {
   }
 });
 
+const liveWindow = liveMode ? new LiveWindow() : null;
+let liveRecipeTargets = {};
+let pendingLiveRecipe = null;
+let liveTargets = {};
+let livePaused = false;
+let liveRenderedRevision = -1;
+let liveRenderedBoundary = -1;
+let liveLastRefresh = 0;
+let liveClearPending = false;
+let livePublisher = null;
+
+function readRecipeTargets(targets) {
+  return Object.fromEntries(Object.entries(targets || {}).slice(0, 256)
+    .filter(([, value]) => Array.isArray(value))
+    .map(([key, values]) => [key, values.slice(0, 32)
+      .filter(target => Number.isFinite(target?.x) && Number.isFinite(target?.z))
+      .map(({x, z, r, angle, scale, type, side}) => ({x, z, r, angle, scale,
+        type: typeof type === "string" ? type.slice(0, 120) : "Target",
+        side: side === "left" || side === "right" ? side : x < 0 ? "left" : x > 0 ? "right" : "center"}))]));
+}
+
+function refreshLiveCategories(previous) {
+  const keys = ["config", "scene", "vr", "fly", "folder", "animal"];
+  if (keys.every(key => JSON.stringify(previous.categories[key]) === JSON.stringify(datasetHeader.categories[key]))) return;
+  const selections = Object.fromEntries(keys.slice(0, -1).map(key => {
+    const choices = filterChoices(key), all = choices.every(choice => choice.checked);
+    return [key, all ? null : new Set(choices.filter(choice => choice.checked)
+      .map(choice => previous.categories[key][Number(choice.value)]))];
+  }));
+  const oldVisibility = new Map(previous.categories.animal.map((label, index) => [label, animalVisibility[index]]));
+  for (const key of keys) {
+    const previousNames = new Map(previous.categories[key].map((label, index) => [label, displayNames[key]?.[index] || label]));
+    displayNames[key] = datasetHeader.categories[key].map(label => previousNames.get(label) || label);
+  }
+  remapCategoryCodes(previous.categories);
+  populateCategories();
+  for (const [key, selected] of Object.entries(selections)) {
+    if (selected) for (const choice of filterChoices(key)) choice.checked = selected.has(datasetHeader.categories[key][Number(choice.value)]);
+  }
+  animalVisibility = datasetHeader.categories.animal.map(label => oldVisibility.get(label) !== false);
+  renderAnimalVisibility();
+  renderDisplayLabels();
+  renderMirrorPairs();
+}
+
+function refreshLive(force = false) {
+  force ||= liveClearPending;
+  if ((livePaused && !force) || workerBusy || pendingCompute || scheduledScope || reportCapturing
+      || (worker && !workerReady) || liveRenderedRevision === liveWindow.revision) return;
+  if (!force && transitionSelectionActive && liveRenderedBoundary === liveWindow.boundary) return;
+  const now = performance.now();
+  const cadence = ["trajectory", "heading", "compare"].includes(currentView) ? 750 : 4000;
+  if (!force && liveRenderedBoundary === liveWindow.boundary && now - liveLastRefresh < cadence) return;
+  const {header, columns} = liveWindow.dataset({...liveRecipeTargets, ...liveTargets});
+  liveClearPending = false;
+  if (!datasetHeader && !header.counts.retainedRows) return;
+  const previous = datasetHeader;
+  datasetHeader = header;
+  if (!previous) {
+    populateControls(true);
+    if (pendingLiveRecipe) {
+      applyRecipeControls(pendingLiveRecipe);
+      pendingLiveRecipe = null;
+    }
+    worker = new Worker("/static/worker.js");
+    worker.onmessage = handleWorkerMessage;
+    worker.onerror = event => {
+      workerBusy = false; workerReady = false;
+      setStatus("error", "Worker crashed", event.message);
+    };
+  } else {
+    refreshLiveCategories(previous);
+    datasetSummary();
+    for (const [key, control] of rangeControls) control.updateRange(header.filterHistograms[key]);
+  }
+  // Cached products are scoped to one column snapshot. Keep the mounted view
+  // while its replacement is calculated and load other layers on demand.
+  products = {};
+  workerReady = false;
+  liveRenderedRevision = liveWindow.revision;
+  liveRenderedBoundary = liveWindow.boundary;
+  liveLastRefresh = now;
+  worker.postMessage({type: "init", header, columns}, Object.values(columns).map(column => column.buffer));
+}
+
+function updateLiveUnits() {
+  if (liveUnitsFixed) return;
+  const units = liveWindow.scale;
+  byId("unit-scale").value = units && units !== 100 ? 1 / units : 1;
+  byId("unit-name").value = units === 100 ? "cm" : units ? "m" : "world units";
+  applyDisplayUnits(false);
+}
+
+function setLiveStatus(status) {
+  const title = livePaused ? "View paused" : status;
+  if (statusTitle.textContent !== title) setStatus("ready", title,
+    "Live samples · bounded observation window · open Live for receiver and rig status.");
+}
+
+function startLiveMode() {
+  updateLiveUnits();
+  byId("source-popover").hidden = true;
+  byId("live-controls").hidden = false;
+  byId("live-link").hidden = true;
+  document.title = "Daari Deepa · Live MATREX trajectories";
+  setStatus("ready", "Waiting for publisher", "Open Live for connection and rig status.");
+  mountLiveControls({
+    receive(data, frame, context, status) {
+      liveWindow.ingest(data, frame, context);
+      const identity = JSON.stringify([liveWindow.publisher, liveWindow.session, liveWindow.scale]);
+      if (identity !== livePublisher) {
+        liveTargets = {}; livePublisher = identity;
+        updateLiveUnits();
+      }
+      const treatment = context.experiment?.configFile || context.experiment?.design;
+      if (frame && treatment && Array.isArray(context.targets)
+          && (!frame.system?.phase || frame.system.phase === context.experiment?.phase)) {
+        const targets = readRecipeTargets({[treatment]: context.targets})[treatment];
+        if (JSON.stringify(targets) !== JSON.stringify(liveTargets[treatment])) {
+          liveTargets = {...liveTargets, [treatment]: targets};
+          liveWindow.revision += 1;
+        }
+      }
+      setLiveStatus(status);
+    },
+    connectionLost() { setLiveStatus("Viewer connection lost · reconnecting"); },
+    clear() {
+      const sequence = liveWindow.sequence;
+      liveWindow.clear();
+      liveWindow.sequence = sequence;
+      liveClearPending = true;
+      refreshLive(true);
+    },
+    pause(paused) {
+      livePaused = paused;
+      setLiveStatus(byId("connection").textContent);
+      if (!paused) refreshLive(true);
+    },
+  });
+  setInterval(refreshLive, 250);
+}
+
 const urlSource = new URLSearchParams(location.search).get("source");
-fetch("/native-config.json").then(response => response.json()).then(config => {
+if (liveMode) startLiveMode();
+else fetch("/native-config.json").then(response => response.json()).then(config => {
   const source = urlSource || config.defaultSource || "";
   sourceInput.value = source;
   if (source) loadDataset(source);

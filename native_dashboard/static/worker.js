@@ -83,7 +83,7 @@ function initDataset(message) {
   header = message.header;
   sourceBuffer = message.buffer;
   bodyOffset = message.bodyOffset;
-  data = unpack(header, sourceBuffer);
+  data = message.columns || unpack(header, sourceBuffer);
   const n = data.segment.length;
   const startList = n ? [0] : [];
   for (let i = 1; i < n; i += 1) if (data.segment[i] !== data.segment[i - 1]) startList.push(i);
@@ -121,14 +121,14 @@ function initDataset(message) {
   const dtSample = [];
   const stride = Math.max(1, Math.floor(n / 100000));
   for (let i = 1; i < n; i += stride) {
-    if (data.segment[i] === data.segment[i - 1]) {
+    if (data.segment[i] === data.segment[i - 1] && !data.breakBefore?.[i]) {
       const dt = data.time[i] - data.time[i - 1];
       if (dt > 0 && Number.isFinite(dt)) dtSample.push(dt);
     }
   }
   dtSample.sort((a, b) => a - b);
   medianDt = dtSample.length ? dtSample[Math.floor(dtSample.length / 2)] : .01;
-  postMessage({type: "ready", counts: header.counts, medianDt});
+  postMessage({type: "ready", counts: header.counts, medianDt, live: Boolean(message.columns)});
 }
 
 function inRange(value, range) {
@@ -327,6 +327,25 @@ function retainedTimeMaximum(seg, rowKeep) {
   return NaN;
 }
 
+function retainedDisplacement(seg, rowKeep, breakBefore) {
+  let first = -1, last = -1, displacement = 0, foundRun = false;
+  const end = ends[seg];
+  for (let row = starts[seg]; row <= end; row += 1) {
+    if (row === end || breakBefore?.[row]) {
+      if (first >= 0) {
+        displacement += Math.hypot(activeX[last] - activeX[first], activeZ[last] - activeZ[first]);
+        foundRun = true;
+        first = -1;
+      }
+    }
+    if (row < end && rowKeep[row]) {
+      if (first < 0) first = row;
+      last = row;
+    }
+  }
+  return foundRun ? displacement : NaN;
+}
+
 function buildAnalysis(state) {
   const started = performance.now();
   const ns = starts.length;
@@ -390,10 +409,26 @@ function buildAnalysis(state) {
   for (let seg = 0; seg < ns; seg += 1) {
     if (segmentKeep[seg]) rowKeep.fill(1, starts[seg], ends[seg]);
   }
+  // A removed row and a broken edge are different. Keep the latter even
+  // when its sample is masked so decimation cannot reconnect across it.
+  let breakBefore = null, movement = activeMovement;
+  const markBreak = row => {
+    breakBefore ??= new Uint8Array(rowKeep.length);
+    breakBefore[row] = 1;
+    if (Number.isFinite(activeMovement[row])) {
+      if (movement === activeMovement) movement = activeMovement.slice();
+      movement[row] = NaN;
+    }
+  };
   let invalidRows = 0;
   for (let row = 0; row < rowKeep.length; row += 1) {
-    if (rowKeep[row] && !(Number.isFinite(activeX[row]) && Number.isFinite(activeZ[row])
-        && Number.isFinite(data.time[row]))) { rowKeep[row] = 0; invalidRows += 1; }
+    if (!rowKeep[row]) continue;
+    if (data.breakBefore?.[row]) markBreak(row);
+    if (!(Number.isFinite(activeX[row]) && Number.isFinite(activeZ[row]) && Number.isFinite(data.time[row]))) {
+      rowKeep[row] = 0; invalidRows += 1;
+      markBreak(row);
+      if (data.segment[row + 1] === data.segment[row]) markBreak(row + 1);
+    }
   }
   if (invalidRows) audit("Valid tracking samples", `${invalidRows.toLocaleString()} non-finite position/time samples excluded`, segmentKeep, rowKeep);
 
@@ -416,7 +451,10 @@ function buildAnalysis(state) {
       if (!segmentKeep[seg]) continue;
       let lastJump = -Infinity;
       for (let i = starts[seg]; i < ends[seg]; i += 1) {
-        if (data.rawSpeed[i] > jump) lastJump = data.time[i];
+        if (data.rawSpeed[i] > jump) {
+          lastJump = data.time[i];
+          markBreak(i);
+        }
         if (data.time[i] - lastJump <= buffer) rowKeep[i] = 0;
       }
       let nextJump = Infinity;
@@ -433,9 +471,7 @@ function buildAnalysis(state) {
   if (minDisplacement > 0) {
     for (let seg = 0; seg < ns; seg += 1) {
       if (!segmentKeep[seg]) continue;
-      let first = -1, last = -1;
-      for (let i = starts[seg]; i < ends[seg]; i += 1) if (rowKeep[i]) { if (first < 0) first = i; last = i; }
-      if (first < 0 || Math.hypot(activeX[last] - activeX[first], activeZ[last] - activeZ[first]) < minDisplacement) {
+      if (!(retainedDisplacement(seg, rowKeep, breakBefore) >= minDisplacement)) {
         segmentKeep[seg] = 0; rowKeep.fill(0, starts[seg], ends[seg]);
       }
     }
@@ -579,7 +615,7 @@ function buildAnalysis(state) {
     }
   }
   const result = {
-    rowKeep, segmentKeep, visibleSegments, segmentPanel, panelNames, panelKeys,
+    rowKeep, breakBefore, movement, segmentKeep, visibleSegments, segmentPanel, panelNames, panelKeys,
     panelCount: panelNames.length, visibleRows, animals: animals.size,
     roiStats, roiBaseSegments, roiRowKeep, segmentOutcome, panelRois,
     roiCounts: {left: roiLeft, right: roiRight}, roiReach,
@@ -614,6 +650,7 @@ function applyCurtain(state, base) {
           || activeSegmentMaxZ[seg] < ring.z - ring.r || activeSegmentMinZ[seg] > ring.z + ring.r) hits[index] = 2;
     }
     for (let row = starts[seg]; row < ends[seg]; row += 1) {
+      if (base.breakBefore?.[row]) previous = -1;
       if (!qualityRows[row]) { previous = -1; continue; }
       for (let index = 0; index < activeRings.length; index += 1) {
         if (hits[index]) continue;
@@ -866,26 +903,28 @@ function playbackLimit(state, analysis) {
 
 function buildTrajectory(state, analysis) {
   const started = performance.now();
-  const ns = starts.length;
-  const trajectorySegments = analysis.visibleSegments;
-  const eligibleCount = new Uint32Array(ns);
+  const runs = [];
+  const segmentLabels = new Array(starts.length);
   let totalLinks = 0;
-  for (const seg of trajectorySegments) {
-    let count = 0;
-    for (let i = starts[seg]; i < ends[seg]; i += 1) if (analysis.rowKeep[i] && eligibleForDrawing(i, state)) count += 1;
-    eligibleCount[seg] = count;
-    if (count > 1) totalLinks += count - 1;
+  for (const seg of analysis.visibleSegments) {
+    segmentLabels[seg] = `${header.categories.file[data.segmentFile[seg]]} · replicate ${data.segmentReplicate[seg]} · trial ${data.segmentTrial[seg]} / step ${data.segmentStep[seg]}`;
+    let from = starts[seg], count = 0;
+    const end = ends[seg];
+    for (let row = from; row <= end; row += 1) {
+      if (row === end || analysis.breakBefore?.[row]) {
+        if (count > 1) {
+          runs.push({seg, from, to: row, count});
+          totalLinks += count - 1;
+        }
+        from = row; count = 0;
+      }
+      if (row < end && analysis.rowKeep[row] && eligibleForDrawing(row, state)) count += 1;
+    }
   }
   const budget = Math.max(1000, Math.floor(Number(state.pointBudget) || 150000));
   const stride = Math.max(1, Math.ceil(totalLinks / budget));
   let selectedLinks = 0;
-  for (const seg of trajectorySegments) {
-    const count = eligibleCount[seg];
-    if (count <= 1) continue;
-    const regular = Math.floor((count - 1) / stride);
-    const extra = ((count - 1) % stride) ? 1 : 0;
-    selectedLinks += regular + extra;
-  }
+  for (const {count} of runs) selectedLinks += Math.ceil((count - 1) / stride);
   const vertices = new Float32Array(selectedLinks * 4);
   const panels = new Uint16Array(selectedLinks * 2);
   const colors = new Uint8Array(selectedLinks * 2);
@@ -894,14 +933,10 @@ function buildTrajectory(state, analysis) {
   const times = new Float32Array(selectedLinks * 2);
   const samples = new Float32Array(selectedLinks * 2);
   let link = 0;
-  const segmentLabels = new Array(starts.length);
-  for (const seg of trajectorySegments) {
-    segmentLabels[seg] = `${header.categories.file[data.segmentFile[seg]]} · replicate ${data.segmentReplicate[seg]} · trial ${data.segmentTrial[seg]} / step ${data.segmentStep[seg]}`;
-    const count = eligibleCount[seg];
-    if (count <= 1) continue;
+  for (const {seg, from, to, count} of runs) {
     let position = 0, previous = -1;
     const sample = hashSample(seg, state.sampleSeed || 0);
-    for (let i = starts[seg]; i < ends[seg]; i += 1) {
+    for (let i = from; i < to; i += 1) {
       if (!analysis.rowKeep[i] || !eligibleForDrawing(i, state)) continue;
       const select = position === 0 || position === count - 1 || position % stride === 0;
       if (select) {
@@ -1042,7 +1077,7 @@ function buildDirection(state, analysis) {
   const base = analysis.boundsSource || analysis;
   const planKey = `${lastOccupancyPlanKey}|${state.angleSource}|${!!state.movingOnly}|${Number(state.walkThreshold) || 0}`;
   if (!lastDirectionPlan || lastDirectionPlanKey !== planKey) {
-    const heading = state.angleSource === "movement" ? activeMovement : activeOrientation;
+    const heading = state.angleSource === "movement" ? base.movement : activeOrientation;
     const contributions = new Array(starts.length);
     for (const segment of base.visibleSegments) {
       const panel = base.segmentPanel[segment];
@@ -1109,16 +1144,20 @@ function buildTransition(state, analysis) {
     ? Number(state.transitionSplit) : modalBin * grid.bin;
   for (const seg of analysis.visibleSegments) {
     const start = starts[seg], end = ends[seg], length = end - start;
-    const suffixMin = new Float32Array(length + 1), suffixMax = new Float32Array(length + 1);
-    suffixMin[length] = Infinity; suffixMax[length] = -Infinity;
+    const laterMin = new Float32Array(length), laterMax = new Float32Array(length);
+    const runEnd = new Float32Array(length);
     let minimum = Infinity, maximum = -Infinity, finalCoordinate = NaN;
     for (let offset = length - 1; offset >= 0; offset -= 1) {
       const row = start + offset;
+      if (row + 1 < end && analysis.breakBefore?.[row + 1]) {
+        minimum = Infinity; maximum = -Infinity; finalCoordinate = NaN;
+      }
+      laterMin[offset] = minimum; laterMax[offset] = maximum;
       if (analysis.rowKeep[row] && Number.isFinite(coordinate[row])) {
         minimum = Math.min(minimum, coordinate[row]); maximum = Math.max(maximum, coordinate[row]);
         if (!Number.isFinite(finalCoordinate)) finalCoordinate = coordinate[row];
       }
-      suffixMin[offset] = minimum; suffixMax[offset] = maximum;
+      runEnd[offset] = finalCoordinate;
     }
     const seen = new Set(), panel = analysis.segmentPanel[seg];
     for (let offset = 0; offset < length; offset += 1) {
@@ -1132,8 +1171,8 @@ function buildTransition(state, analysis) {
       seen.add(local);
       const index = panel * cells + local, upper = coordinate[row] >= split;
       entered[index] += 1;
-      if (upper ? suffixMin[Math.min(length, offset + 1)] < split : suffixMax[Math.min(length, offset + 1)] > split) crossed[index] += 1;
-      if (Number.isFinite(finalCoordinate) && (upper ? finalCoordinate < split : finalCoordinate > split)) ended[index] += 1;
+      if (upper ? laterMin[offset] < split : laterMax[offset] > split) crossed[index] += 1;
+      if (upper ? runEnd[offset] < split : runEnd[offset] > split) ended[index] += 1;
     }
   }
   return {...spatialCommon(state, analysis, grid), entered, crossed, ended, split, axis,
@@ -1184,7 +1223,7 @@ function unitColor(seg, state, analysis, metricMean = NaN) {
 
 function buildPolar(state, analysis) {
   const started = performance.now();
-  const ns = starts.length, heading = state.angleSource === "movement" ? activeMovement : activeOrientation;
+  const ns = starts.length, heading = state.angleSource === "movement" ? analysis.movement : activeOrientation;
   const densityBins = 72;
   const animalCount = Math.max(1, header.categories.animal.length);
   const headingDensity = new Uint32Array(analysis.panelCount * animalCount * densityBins);
@@ -1304,7 +1343,7 @@ function buildPolar(state, analysis) {
 }
 
 function buildHeading(state, analysis) {
-  const heading = state.angleSource === "movement" ? activeMovement : activeOrientation;
+  const heading = state.angleSource === "movement" ? analysis.movement : activeOrientation;
   const maxTime = Math.max(.001, playbackLimit(state, analysis));
   const mode = state.headingMode || "trial";
   let timeBin = Math.max(.05, Number(state.headingBin) || 2);
@@ -1408,6 +1447,7 @@ function buildHeading(state, analysis) {
   for (const seg of analysis.visibleSegments) {
     let count = 0, prev = NaN;
     for (let row = starts[seg]; row < ends[seg]; row += 1) {
+      if (analysis.breakBefore?.[row]) prev = NaN;
       if (!analysis.rowKeep[row] || !Number.isFinite(heading[row]) || data.time[row] > maxTime
         || !eligibleForDrawing(row, state)) { prev = NaN; continue; }
       if (Number.isFinite(prev) && Math.abs(heading[row] - prev) <= 180) totalLinks += 1;
@@ -1422,6 +1462,7 @@ function buildHeading(state, analysis) {
     const sample = hashSample(seg, state.sampleSeed || 0);
     const color = unitColor(seg, state, analysis);
     for (let row = starts[seg]; row < ends[seg]; row += 1) {
+      if (analysis.breakBefore?.[row]) { previous = -1; previousAngle = NaN; }
       const a = heading[row];
       if (!analysis.rowKeep[row] || !Number.isFinite(a) || data.time[row] > maxTime
         || !eligibleForDrawing(row, state)) { previous = -1; previousAngle = NaN; continue; }
@@ -1455,17 +1496,18 @@ function buildHeading(state, analysis) {
 function buildMetrics(state, analysis) {
   const segmentMetric = seg => {
     let complete = true;
-    for (let row = starts[seg]; row < ends[seg]; row += 1) if (!analysis.rowKeep[row]) { complete = false; break; }
+    for (let row = starts[seg]; row < ends[seg]; row += 1) {
+      if (!analysis.rowKeep[row] || (row > starts[seg] && analysis.breakBefore?.[row])) { complete = false; break; }
+    }
     if (complete) return {
       distance: data.segmentDistance[seg], displacement: data.segmentDisplacement[seg],
       speed: data.segmentMedianSpeed[seg], tortuosity: data.segmentTortuosity[seg],
     };
-    let first = -1, last = -1, previous = -1, distance = 0;
+    let previous = -1, distance = 0;
     const speeds = [], tortuosities = [];
     for (let row = starts[seg]; row < ends[seg]; row += 1) {
+      if (analysis.breakBefore?.[row]) previous = -1;
       if (!analysis.rowKeep[row]) { previous = -1; continue; }
-      if (first < 0) first = row;
-      last = row;
       if (previous >= 0) distance += Math.hypot(
         activeX[row] - activeX[previous], activeZ[row] - activeZ[previous],
       );
@@ -1476,8 +1518,7 @@ function buildMetrics(state, analysis) {
     speeds.sort((a, b) => a - b); tortuosities.sort((a, b) => a - b);
     return {
       distance,
-      displacement: first >= 0 && last >= 0
-        ? Math.hypot(activeX[last] - activeX[first], activeZ[last] - activeZ[first]) : NaN,
+      displacement: retainedDisplacement(seg, analysis.rowKeep, analysis.breakBefore),
       speed: speeds.length ? percentile(speeds, .5) : NaN,
       tortuosity: tortuosities.length ? percentile(tortuosities, .5) : NaN,
     };
@@ -1846,7 +1887,7 @@ function buildWindows(state, analysis) {
     xmin: Math.min(Number(window.xmin), Number(window.xmax)), xmax: Math.max(Number(window.xmin), Number(window.xmax)),
     zmin: Math.min(Number(window.zmin), Number(window.zmax)), zmax: Math.max(Number(window.zmin), Number(window.zmax)),
   }));
-  const heading = state.angleSource === "movement" ? activeMovement : activeOrientation;
+  const heading = state.angleSource === "movement" ? analysis.movement : activeOrientation;
   const summaries = Array.from({length: analysis.panelCount * 2}, (_, index) => ({
     panel: Math.floor(index / 2), window: index % 2, rows: 0, segments: 0, distance: 0, sine: 0, cosine: 0, valid: 0,
   }));
@@ -1865,7 +1906,7 @@ function buildWindows(state, analysis) {
         }
         const local = segmentValues[index], summary = summaries[panel * 2 + index];
         local.rows += 1; summary.rows += 1;
-        if (local.previous >= 0) {
+        if (local.previous >= 0 && !analysis.breakBefore?.[row]) {
           const distance = Math.hypot(activeX[row] - activeX[local.previous], activeZ[row] - activeZ[local.previous]);
           if (Number.isFinite(distance)) { local.distance += distance; summary.distance += distance; }
         }
@@ -1965,7 +2006,7 @@ function buildRoi(state, analysis) {
   }
 
   const errorValues = [], errorSides = [], errorPanels = [], errorAnimals = [], errorTrials = [];
-  const heading = state.angleSource === "movement" ? activeMovement : activeOrientation;
+  const heading = state.angleSource === "movement" ? analysis.movement : activeOrientation;
   const stride = Math.max(1, Math.ceil(analysis.visibleRows / 100000));
   let seen = 0;
   for (const seg of analysis.visibleSegments) {

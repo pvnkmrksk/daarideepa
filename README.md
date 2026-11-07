@@ -25,9 +25,11 @@ The [MATREX toolchain guide](https://pvnkmrksk.github.io/matrexVR/manual/integra
 The current source adds **Live** at `/live/`, alongside recorded-data analysis.
 It receives MATREX VR schema-2 snapshots and periodic experiment-context
 heartbeats, then streams the latest state to browsers with Server-Sent Events.
-It shows trajectories, heading, tracker freshness, steering, flight state,
-scene, trial, configuration and animal/species metadata. Live viewing is a
-bounded observation window; MATREX's saved files remain the experiment record.
+It uses the recorded explorer's plots, filters, curtain tools, viewport and
+view recipes, alongside the publisher, trial and tracker diagnostics. Paths
+break at trial boundaries and at reported pose resets. The plots and analysis
+update over a bounded observation window. MATREX's saved files retain the
+full experiment data.
 
 ```bash
 python -m pip install -r requirements-native.txt

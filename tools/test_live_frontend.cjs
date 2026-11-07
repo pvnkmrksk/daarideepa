@@ -2,53 +2,92 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const elements = new Map(), charts = [], intervals = [];
-function element() { return {textContent:'', dataset:{}, children:[], clientWidth:720, clientHeight:420, append(v){this.children.push(v);}, replaceChildren(){this.children=[];}}; }
-const $ = id => { if(!elements.has(id))elements.set(id,element());return elements.get(id); };
-let stream;
-const state = {receiver:{endpoint:'tcp://host:9880',state:'receiving',snapshotAgeSeconds:0},context:{sessionId:'run-A',scene:{worldUnitsPerMetre:100},animals:[{vrId:'VR1',animalId:'animal β',speciesName:'Agrotis infusa',backend:'HejjéTrac'}]},telemetry:{schemaVersion:2,sequence:1,timestampUtc:'2026-10-25T12:00:00Z',experimentContext:{sessionId:'run-A'},system:{sceneName:'Choice',sceneNumber:1,trialNumber:1},frameTiming:{framesPerSecond:120,frameMeanMs:8.3},rigs:[{vrId:'VR1',pose:{x:1,z:2,yaw:45},input:{state:'connected',latest:{ageSeconds:.1,fresh:true}}}]}};
-const context = {document:{getElementById:$,createElement:element},echarts:{init(){const c={series:[],setOption(o){if(o.series)this.series=o.series;},clear(){this.series=[];},on(){},dispatchAction(){},resize(){}};charts.push(c);return c;}},ResizeObserver:class{observe(){}},EventSource:class{constructor(){stream=this;this.handlers={};}addEventListener(name,fn){this.handlers[name]=fn;}},fetch:async()=>({json:async()=>({...state,controlAvailable:true})}),setInterval:fn=>intervals.push(fn),Date,Map,Set,Number,JSON,Infinity,Math};
-vm.createContext(context);
-vm.runInContext(fs.readFileSync('native_dashboard/static/live.js','utf8'),context);
-function emit(s){stream.handlers.snapshot({data:JSON.stringify(s)});intervals[0]();}
-(async()=>{
- await new Promise(resolve=>setImmediate(resolve));
- emit(state);
- assert.equal($('fps').textContent,'120.0 FPS');
- assert.match($('position-units').textContent,/centimetres/);
- assert.equal($('animals').children[0].children[0].textContent,'animal β');
- assert.equal($('animals').children[0].children[2].dataset.stale,'false');
- state.receiver.snapshotAgeSeconds=4;state.context.animals[0].animalId='late context animal';emit(state);
- assert.equal($('animals').children[0].children[2].dataset.stale,'true','An idle event must age an unchanged pose/input');
- assert.equal($('animals').children[0].children[0].textContent,'late context animal','Late context updates the table without another pose');
- assert.equal(charts[0].series[0].data.length,1,'Repeating a snapshot must not duplicate a path point');
- for(let i=2;i<=2200;i++){state.telemetry.sequence=i;state.telemetry.rigs[0].pose.x=i;emit(state);}
- assert.equal(charts[0].series[0].data.length,1800);
- state.receiver.endpoint='tcp://other-host:9880';state.telemetry.sequence=2201;emit(state);
- assert.equal(charts[0].series[0].data.length,1,'Remote viewers clear trails when the server changes endpoint');
- state.telemetry.experimentContext.sessionId='run-B';state.telemetry.sequence=2202;emit(state);
- assert.equal($('run-id').textContent,'run-B');
- assert.equal($('animals').children[0].children[0].textContent,'VR1','Do not label new-session poses with old-session animals');
- state.telemetry.sequence=1;emit(state);
- assert.equal(charts[0].series[0].data.length,1,'Publisher restart clears history');
- state.telemetry.sequence=2;state.telemetry.rigs=Array.from({length:40},(_,i)=>({vrId:`VR${i+1}`,pose:{x:i,z:i,yaw:0}}));emit(state);
- assert.equal(charts[0].series.length,32);
- state.telemetry.sequence=3;state.telemetry.rigs=[{vrId:'VR99',pose:{x:0,z:0,yaw:0}}];emit(state);
- assert.equal(charts[0].series.length,1,'Changing rigs cannot grow retained histories without bound');
- $('pause-view').onclick();state.telemetry.sequence=4;emit(state);assert.equal($('pause-view').textContent,'Resume view');
- $('pause-view').onclick();intervals[0]();assert.equal(charts[0].series[0].data.length,2);
- $('clear-view').onclick();intervals[0]();assert.equal(charts[0].series.length,0);
- state.context={sessionId:'run-B',timestampUtc:'2026-10-25T12:00:10Z',experiment:{sceneName:'Swarm',sceneNumber:2,trialNumber:1,configFile:'swarm.json'},scene:{name:'Swarm',worldUnitsPerMetre:1}};state.receiver.contextAgeSeconds=0;state.receiver.snapshotAgeSeconds=4;emit(state);
- assert.match($('scene').textContent,/Swarm/);
- assert.match($('position-units').textContent,/metres/);
- assert.equal(charts[0].series.length,0,'A newer context must not relabel old-scene paths with new units');
- assert.match($('animals').children[0].children[0].textContent,/Waiting/);
- state.telemetry.timestampUtc='2026-10-25T12:00:11Z';state.telemetry.system={sceneName:'Swarm',sceneNumber:2,trialNumber:1};state.telemetry.experimentContext={sessionId:'run-B',worldUnitsPerMetre:1};state.telemetry.sequence=5;emit(state);
- assert.equal(charts[0].series[0].data.length,1);
- state.context.timestampUtc='2026-10-25T12:00:09Z';state.context.experiment={sceneName:'Choice',sceneNumber:1,trialNumber:1,configFile:'old.json'};state.context.scene={name:'Choice',worldUnitsPerMetre:100};emit(state);
- assert.match($('scene').textContent,/Swarm/);
- assert.match($('position-units').textContent,/metres/,'An older context must not relabel a newer pose');
- assert.notEqual($('config').textContent,'old.json');
 
- console.log('PASS: live frontend units/FPS, Unicode, stale input, bounded histories, endpoint/session/restart changes and pause/clear controls');
-})().catch(error=>{console.error(error);process.exitCode=1;});
+async function main() {
+  const model = fs.readFileSync('native_dashboard/static/live_dataset.js');
+  const {LiveWindow, matchingTelemetry} = await import('data:text/javascript;base64,' + model.toString('base64'));
+  const live = new LiveWindow();
+  const receiver = {endpoint: 'tcp://host:9880', topic: 'matrex.telemetry.v2', connectionGeneration: 1};
+  const time = seconds => new Date(Date.UTC(2026, 9, 25) + seconds * 1000).toISOString();
+  const identity = {sessionId: 'run-A', worldUnitsPerMetre: 100, configFile: 'choice.json'};
+  let context = {sessionId: 'run-A', scene: {worldUnitsPerMetre: 100},
+    animals: [{vrId: 'VR1', animalId: 'animal β'}]};
+  let sequence = 0;
+  function emit(x, {trial = 1, step = 1, marker, running = true, active = true, at,
+    scene = 'Choice', rigs, source = identity, duplicate = false} = {}) {
+    if (!duplicate) sequence += 1;
+    const clock = at ?? sequence / 10;
+    const telemetry = {schemaVersion: 2, sequence, timestampUtc: time(clock), realtimeSeconds: clock,
+      experimentContext: source, system: {sceneName: scene, sceneNumber: step, trialNumber: trial, running},
+      rigs: rigs ?? [{vrId: 'VR1', active, poseContinuityId: marker, pose: {x, z: 2, yaw: 45}}]};
+    const data = {receiver, context, telemetry};
+    const matched = matchingTelemetry(data);
+    live.ingest(data, matched.frame, matched.context);
+    return matched;
+  }
+
+  emit(0, {marker: 1}); emit(1, {marker: 1}); emit(1, {marker: 1, duplicate: true});
+  emit(12, {marker: 4}); emit(13, {marker: 4});
+  emit(14, {marker: 4, active: false}); emit(16, {marker: 4}); emit(17, {marker: 4});
+  emit(70, {marker: 4, trial: 2}); emit(71, {marker: 4, trial: 2});
+  emit(72, {marker: 4, trial: 2, step: 2}); emit(73, {marker: 4, trial: 2, step: 2});
+  const {header, columns} = live.dataset({'choice.json': [{x: 4, z: 6, type: 'bar'}]});
+  assert.equal(header.counts.retainedRows, 10);
+  assert.equal(header.counts.segments, 3);
+  assert.deepEqual(header.categories.animal, ['animal β@VR1']);
+  assert.equal(header.rois['choice.json'][0].type, 'bar');
+  assert.deepEqual([...columns.segmentTrial], [0, 1, 1]);
+  assert.deepEqual([...columns.segmentStep], [0, 0, 1]);
+  assert.deepEqual([...columns.breakBefore], [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]);
+  assert.deepEqual([...columns.segmentDistance], [3, 1, 1]);
+  assert.deepEqual([...columns.segmentDisplacement], [3, 1, 1]);
+  assert.ok(Number.isNaN(columns.rawSpeed[2]));
+  assert.ok(Number.isNaN(columns.movement[2]));
+
+  const messages = [];
+  const worker = {self: {}, postMessage: message => messages.push(message), performance};
+  vm.createContext(worker);
+  vm.runInContext(fs.readFileSync('native_dashboard/static/worker.js', 'utf8'), worker);
+  worker.self.onmessage({data: {type: 'init', header, columns}});
+  worker.self.onmessage({data: {type: 'compute', scope: 'full', requestId: 1,
+    state: {groupBy: 'all', colorBy: 'none', panelColumns: 1, pointBudget: 1000, binSize: 1}}});
+  assert.equal(messages[0].type, 'ready');
+  assert.equal(messages[1].type, 'result', messages[1].error);
+  const {products} = messages[1];
+  assert.deepEqual([...products.trajectory.vertices], [0, 2, 1, 2, 12, 2, 13, 2, 16, 2, 17, 2, 70, 2, 71, 2, 72, 2, 73, 2]);
+  for (const key of ['heatmap', 'direction', 'polar', 'heading', 'metrics', 'roi', 'diagnostics']) {
+    assert.ok(products[key], key + ' uses the shared native worker');
+  }
+
+  worker.self.onmessage({data: {type: 'compute', scope: 'transition', requestId: 2,
+    state: {groupBy: 'all', colorBy: 'none', panelColumns: 1, pointBudget: 1000, binSize: 1, transitionSplit: 20}}});
+  assert.ok(messages[2].products?.transition, messages[2].error);
+
+  receiver.connectionGeneration += 1;
+  emit(0); emit(51); emit(52);
+  assert.deepEqual([...live.dataset().columns.breakBefore], [1, 1, 0], 'A large legacy jump breaks the path');
+  emit(120, {running: false}); emit(60);
+  assert.deepEqual([...live.dataset().columns.segment], [0, 0, 0, 1], 'Stop and restart breaks a reused trial number');
+  const before = live.dataset().header.counts.retainedRows;
+  context = {sessionId: 'run-A', timestampUtc: time(100),
+    experiment: {sceneName: 'Choice', sceneNumber: 3, trialNumber: 1}, scene: {worldUnitsPerMetre: 100}};
+  assert.equal(emit(61).waitingForPose, true);
+  assert.equal(live.dataset().header.counts.retainedRows, before, 'Context heartbeat does not append stale poses');
+  context.timestampUtc = time(0);
+  assert.equal(emit(62).waitingForPose, false, 'Old context cannot relabel a newer frame');
+  const swapped = {...identity, sessionId: 'run-B', worldUnitsPerMetre: 1};
+  emit(0, {scene: 'Terrain', source: swapped});
+  assert.deepEqual([...live.dataset().columns.x], [0], 'Session and scale changes clear incompatible history');
+  assert.deepEqual(live.dataset().header.categories.animal, ['VR1@VR1']);
+  sequence = 0;
+  emit(3, {scene: 'Terrain', source: swapped});
+  assert.deepEqual([...live.dataset().columns.x], [3], 'A sequence rewind resets the viewing window');
+  const manyRigs = Array.from({length: 40}, (_, i) => ({vrId: 'VR' + (i + 1), pose: {x: i, z: i, yaw: 0}}));
+  for (let i = 0; i < 1850; i += 1) emit(i, {at: 1 + i / 100, rigs: manyRigs, scene: 'Terrain', source: swapped});
+  const bounded = live.dataset();
+  assert.equal(bounded.header.counts.animals, 32);
+  assert.equal(bounded.header.counts.retainedRows, 32 * 1800);
+  console.log('PASS: live and recorded worker products, reset and trial links, legacy fallback, metadata and history bounds');
+}
+
+main().catch(error => { console.error(error); process.exitCode = 1; });

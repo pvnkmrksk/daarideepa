@@ -52,6 +52,7 @@ class LiveHub:
         self.frame = None
         self.context = None
         self.version = 0
+        self.connection_generation = 0
         self.received = self.contexts = self.invalid = self.gaps = self.restarts = 0
         self.last_received = self.last_frame_received = self.last_context_received = 0.0
         self.last_sequence = None
@@ -76,6 +77,7 @@ class LiveHub:
                 self.last_received = self.last_frame_received = (
                     self.last_context_received
                 ) = 0.0
+                self.connection_generation += 1
                 self.version += 1
                 self.condition.notify_all()
             self.stop_event = threading.Event()
@@ -202,6 +204,7 @@ class LiveHub:
                         "state": state,
                         "endpoint": self.endpoint,
                         "topic": self.topic,
+                        "connectionGeneration": self.connection_generation,
                         "ageSeconds": age,
                         "snapshotAgeSeconds": time.monotonic()
                         - self.last_frame_received
@@ -272,12 +275,13 @@ def install_live_routes(
 
     @app.get("/live/")
     def live_index():
-        return send_from_directory(static_dir, "live.html")
+        return send_from_directory(static_dir, "index.html")
 
     @app.get("/api/live/snapshot")
     def live_snapshot():
         data = hub.snapshot()
         data["controlAvailable"] = local_operator()
+        data["recordedAvailable"] = not live_only
         response = jsonify(data)
         response.headers["Cache-Control"] = "no-store"
         return response

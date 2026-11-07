@@ -1,8 +1,17 @@
 # Live experiment monitoring
 
-This current-source addition is independent of the recorded-data numerical
-pipeline. It does not alter `_seg_id = SourceFile + CurrentTrial + CurrentStep`,
-filters, occupancy, statistics or saved-view semantics.
+Live and recorded sources use the same native dashboard, spatial viewport,
+filters, and analysis worker. The live source feeds a bounded, sampled window
+into Paths, Occupancy, Flow, Polar, Transitions, Targets, Windows, Heading,
+Metrics, Statistics and Diagnostics. The selected view refreshes at trial or
+step boundaries and periodically while samples arrive. Use Pause view to
+inspect a fixed snapshot while the receiver continues tracking new data.
+
+Capture a view recipe to move the viewport, curtain, panels and visual
+settings between live and recorded data. Recorded paths in a recipe are
+ignored by Live, which uses the connected publisher. Matching treatment
+labels let Live reuse saved target geometry when the publisher has none.
+File selection and dropping folders remain part of the recorded workflow.
 
 ## Transport
 
@@ -27,9 +36,22 @@ second and repeats status when idle. Slow views cannot build an acquisition
 queue. Source-sequence gaps, publisher restarts, receiver errors and three-second
 staleness remain visible. Snapshot and context ages are reported separately, so
 an arriving context heartbeat cannot make an old pose or tracker sample appear
-fresh. Browser history is capped at 1,800 samples per rig
-and 32 visible rigs; it clears on endpoint/session/scene/trial/block changes
-and sequence restart. Histories are an observation window, not a recording.
+fresh. Browser history holds up to 180 seconds and 1,800 samples per rig, with up to
+32 rigs. It retains earlier trials and steps within that window. A publisher,
+session or scene-unit change starts a fresh window. A trial or step change,
+missing rig pose, stop/start, or telemetry interruption breaks the path.
+
+Newer schema-2 publishers can send an optional per-rig `poseContinuityId`.
+A changed value breaks the path without increasing the trial count or adding
+distance across the reset. The ID also covers arena wrapping and survives
+dropped snapshots. For an older publisher with known world-unit scale, jumps
+over half a metre between samples are treated as discontinuities. Smaller
+in-step resets require the marker or a configured jump filter.
+
+When present, `context.targets` supplies up to 32 authored Choice targets for
+the current phase. Targets use the same authored geometry as recorded ROI
+analysis. Trial-relative transforms and other scene types can differ from
+the authored analysis frame.
 
 World X/Z are displayed without changing coordinates. When supplied,
 `worldUnitsPerMetre` identifies metres (1), centimetres (100), or another
@@ -51,7 +73,7 @@ Routes:
 
 | Route | Purpose |
 | --- | --- |
-| `/live/` | Live viewer with offline ECharts assets |
+| `/live/` | Shared native viewer with a live telemetry source |
 | `/api/live/snapshot` | Latest context, snapshot and receiver diagnostics |
 | `/api/live/stream` | Same-origin Server-Sent Events |
 | `POST /api/live/connect` | Loopback operator selects TCP publisher and topic |

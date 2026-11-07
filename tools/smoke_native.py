@@ -86,9 +86,16 @@ try:
         time.sleep(0.03)
     assert data["context"]["sessionId"] == "packaged-smoke"
     assert data["telemetry"]["sequence"] == 27
+    with urlopen(base + "/", timeout=5) as recorded:
+        recorded_shell = recorded.read()
+    with urlopen(base + "/live/", timeout=5) as live:
+        assert live.read() == recorded_shell, "Live and recorded use the same dashboard shell"
+        assert b'id="live-controls"' in recorded_shell
     for route in (
-        "/live/",
+        "/static/app.js",
+        "/static/worker.js",
         "/static/live.js",
+        "/static/live_dataset.js",
         "/static/live.css",
         "/static/vendor/echarts.min.js",
     ):
@@ -138,6 +145,7 @@ try:
                 "lateJoinContext": True,
                 "sse": True,
                 "staticAssets": True,
+                "sharedDashboardShell": True,
                 "recordedDurationSeconds": header["playbackMax"],
                 "canonicalAnimalIdentity": True,
             }

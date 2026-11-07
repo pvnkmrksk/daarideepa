@@ -1,4 +1,4 @@
-"""Exercise the actual live frontend module with deterministic DOM/chart boundaries."""
+"""Exercise live normalization and the shared native worker in Node."""
 from pathlib import Path
 import subprocess
 

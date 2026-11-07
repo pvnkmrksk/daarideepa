@@ -248,22 +248,16 @@ canvas from the exported binned direction vectors.
 The old Dash app stays runnable on this branch as a reference implementation;
 no Plotly code is loaded by the native process.
 
-## Streaming roadmap (not implemented on this branch)
+## Live MATREX source
 
-The current binary dataset remains an immutable snapshot. A later streaming
-mode should preserve that fast warm-interaction model instead of repeatedly
-reloading or recomputing the complete table:
-
-1. Accept either a watched folder of append-only/rotating CSV files or a ZMQ
-   source with an explicit schema and reconnect policy.
-2. Normalize incoming rows through the same segment identity and numeric rules,
-   then send compact row and segment deltas to the browser.
-3. Append trajectory buffers on a roughly 250 ms to 1 s cadence. Do not rebuild
-   settled segments or unrelated analytical products for every packet.
-4. Refresh occupancy, flow, ROI, and metrics at a segment/trial boundary (or a
-   separately throttled cadence), while the active trajectory remains live.
-5. Define file rotation, partial-line, checkpoint, duplicate-row, backpressure,
-   and reconnect behavior before exposing the mode as an analysis source.
+`/live/` mounts the recorded explorer with a different data source. The
+browser normalizes bounded MATREX snapshots into the same typed columns and
+sends a fresh column snapshot to the analysis worker on a throttled cadence.
+A separate break marker preserves discontinuities within a rig/trial/step
+without creating a new replicate. Paths and heading refresh up to roughly
+once per second. The selected analytical view refreshes at trial/step
+boundaries or roughly every four seconds during a trial. See
+[LIVE_TELEMETRY.md](LIVE_TELEMETRY.md) for the data and access contracts.
 
 ## Privacy-first browser deployment roadmap (not implemented on this branch)
 
