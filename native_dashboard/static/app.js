@@ -2845,6 +2845,7 @@ function refreshLive(force = false) {
   if (!datasetHeader && !header.counts.retainedRows) return;
   const previous = datasetHeader;
   datasetHeader = header;
+  updateLiveUnits();
   if (!previous) {
     populateControls(true);
     if (pendingLiveRecipe) {
@@ -2899,7 +2900,6 @@ function startLiveMode() {
       const identity = JSON.stringify([liveWindow.publisher, liveWindow.session, liveWindow.scale]);
       if (identity !== livePublisher) {
         liveTargets = {}; livePublisher = identity;
-        updateLiveUnits();
       }
       const treatment = context.experiment?.configFile || context.experiment?.design;
       if (frame && treatment && Array.isArray(context.targets)

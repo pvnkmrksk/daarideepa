@@ -55,8 +55,31 @@ the authored analysis frame.
 
 World X/Z are displayed without changing coordinates. When supplied,
 `worldUnitsPerMetre` identifies metres (1), centimetres (100), or another
-explicit scene scale. Heading is world yaw in degrees. Tracker freshness and
+explicit scene scale. Heading is signed world yaw in degrees. Tracker freshness and
 telemetry freshness are separate indicators.
+
+## Shared plots and live controls
+
+Live paths use the same WebGL trajectory renderer, palette, equal-scale X/Z
+pan/zoom and physical scale bars as recorded analysis. Live headings use the
+same ECharts renderer and signed −180° to +180° convention; circular wraps and
+telemetry outages break lines instead of drawing artificial turns. A current
+pose arrow uses Unity's +Z-forward / +90°-toward-+X convention. Unknown scene
+scales stay labelled world units.
+
+**Pause view** freezes the displayed samples and their unit scale while the
+receiver and status table continue updating. **Clear viewing window** discards
+the samples held in this browser. Pan and zoom persist across live updates.
+The recorded explorer and Live share their spatial viewport through view recipes.
+
+## Recorded replay
+
+MATREX VR can launch the loopback-only **Recorded replay** workspace for a
+saved run. It follows Unity's independent replay clock and can send play, pause
+and seek commands to that clock. The dashboard uses the saved run's original
+time origin. **Show full path context** overlays the complete recorded path
+behind the replayed position. See the
+[replay protocol](native_dashboard/REPLAY_PROTOCOL.md) for bridge details.
 
 ## Server and remote viewing
 

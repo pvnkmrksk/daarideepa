@@ -217,7 +217,7 @@ class EChartRenderer {
     });
     this.visibilityObserver.observe(host);
   }
-  setData(data) { this.data = data; this.draw(); }
+  setData(data, preserveZoom = false) { this.data = data; this.draw(preserveZoom); }
   setStatistics(data) { this.statistics = data; this.draw(true); }
   setColumns(value) {
     if (!this.data) return;
@@ -537,7 +537,7 @@ export class EChartsHeadingRenderer extends EChartRenderer {
     for (let panel = 0; panel < count; panel += 1) {
       const col = panel % cols, row = Math.floor(panel / cols);
       grid.push({left: col * cellW + 48, top: top + row * cellH + 24, width: Math.max(40, cellW - 66), height: Math.max(45, cellH - 42), containLabel: false});
-      xAxis.push({gridIndex: panel, type: "value", min: 0, max: Math.max(.001, data.maxTime), ...axisBase()});
+      xAxis.push({gridIndex: panel, type: "value", min: Math.max(0, Number(data.minTime) || 0), max: Math.max(.001, data.maxTime), ...axisBase()});
       yAxis.push({gridIndex: panel, type: "value", min: -180, max: 180, interval: 90, ...axisBase(), axisLabel: {...axisBase().axisLabel, formatter: value => `${value}°`}});
       titles.push({text: data.panelNames?.[panel] || "All data", left: col * cellW + 48, top: top + row * cellH, textStyle: {fontSize: 11, fontWeight: 650, color: INK}});
     }
@@ -626,12 +626,15 @@ export class EChartsHeadingRenderer extends EChartRenderer {
         name: data.animalNames?.[animal] || `Animal ${animal + 1}`,
         type: "lines", coordinateSystem: "cartesian2d", xAxisIndex: panel, yAxisIndex: panel,
         data: values, polyline: false, progressive: 5000, progressiveThreshold: 3000,
-        lineStyle: {color: animalColor(animal), width: data.mode === "mean" ? 1.8 : .8, opacity: data.mode === "mean" ? .82 : .26},
+        lineStyle: {color: animalColor(data.animalColors?.[animal] ?? animal),
+          width: data.lineWidth ?? (data.mode === "mean" ? 1.8 : .8),
+          opacity: data.lineOpacity ?? (data.mode === "mean" ? .82 : .26)},
         emphasis: {disabled: values.length > 12000},
       });
     }
     return {
       ...this.base("heading-local-time"), title: titles,
+      aria: {enabled: true, label: {description: `Signed heading from -180 to +180 degrees. Time ${formatNumber(Math.max(0, Number(data.minTime)||0),1)} to ${formatNumber(data.maxTime,1)} seconds. ${(data.animalNames||[]).length} animal series. Circular wraps break the line.`}},
       legend: {type: "scroll", right: 92, top: 8, width: "48%", selected: selectedMap(data, this.animalVisibility), textStyle: {fontSize: 10, color: MUTED}, itemWidth: 16, itemHeight: 7},
       tooltip: {trigger: "item", confine: true, formatter: params => {
         const item = params.data || {}, end = item.coords?.[1] || [];
