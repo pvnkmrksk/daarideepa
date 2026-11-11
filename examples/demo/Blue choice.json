@@ -1,0 +1,18 @@
+{
+  "objects": [
+    {
+      "type": "Left marker",
+      "position": {
+        "x": -10,
+        "z": 24
+      }
+    },
+    {
+      "type": "Right marker",
+      "position": {
+        "x": 10,
+        "z": 24
+      }
+    }
+  ]
+}

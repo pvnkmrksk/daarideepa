@@ -5571,7 +5571,7 @@ def register_callbacks(context):
         raw_h = (raw.to_html(full_html=False, include_plotlyjs=False, config=cfgd)
                  if include_raw else "<p>No raw trace columns selected.</p>")
         return f"""<!DOCTYPE html>
-    <html><head><meta charset="utf-8"><title>Daari Deepa Export</title>
+    <html><head><meta charset="utf-8"><title>daarideepa Export</title>
     <style>body{{font-family:system-ui,sans-serif;margin:18px;color:#222}}
     h2{{margin:0 0 6px}} h3{{margin:18px 0 4px;font-size:14px;color:#555}}
     .info{{background:#e9ecef;padding:8px;border-radius:4px;font-size:13px;margin:6px 0}}
@@ -5610,7 +5610,7 @@ def register_callbacks(context):
     .credit{{font-size:12px;margin-top:22px;color:#667085}}
     .credit a{{color:#2563eb;text-decoration:none;font-weight:650}}</style>
     </head><body>
-    <h2>Daari Deepa</h2>
+    <h2><img src="data:image/png;base64,{base64.b64encode(LOGO_FILE.read_bytes()).decode("ascii")}" alt="" width="44" height="44" style="vertical-align:middle;margin-right:8px">daarideepa</h2>
     <div class="info">{summary or ''}</div>
     <div class="share">State: <code>{share_state or ''}</code></div>
     <h3>Trajectories</h3>{traj_h}
@@ -5948,7 +5948,7 @@ def register_callbacks(context):
         )
     
         ts = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"dari_deepa_export_{ts}.html"
+        filename = f"daarideepa-export-{ts}.html"
         LOGGER.info(
             "export.done filename=%s bytes=%d rows=%d seconds=%.3f",
             filename, len(content.encode("utf-8")), len(df_view),

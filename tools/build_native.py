@@ -14,7 +14,7 @@ subprocess.run(
         "PyInstaller",
         "--noconfirm",
         "--clean",
-        str(ROOT / "daari-deepa.spec"),
+        str(ROOT / "daarideepa.spec"),
     ],
     cwd=ROOT,
     check=True,

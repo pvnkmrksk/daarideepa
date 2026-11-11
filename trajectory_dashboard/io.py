@@ -17,7 +17,7 @@ import pandas as pd
 # rather than silently reporting durations or velocities at the wrong scale.
 if int(pd.__version__.split(".", 1)[0]) >= 3:
     raise ImportError(
-        "Daari Deepa requires pandas 2.x. Install requirements-native.txt or "
+        "daarideepa requires pandas 2.x. Install requirements-native.txt or "
         "requirements.txt; pandas 3 changes datetime units and view semantics."
     )
 

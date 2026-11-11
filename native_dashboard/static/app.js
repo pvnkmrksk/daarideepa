@@ -1216,7 +1216,7 @@ function exportChoiceCounts() {
   const rows = roi.choice.map(item => columns.map(key => cell(key === "panel"
     ? roi.panelNames?.[item.panel] : (Number.isFinite(item[key]) ? item[key] : ""))).join(","));
   downloadBlob(new Blob([[columns.join(","), ...rows].join("\r\n")], {type: "text/csv;charset=utf-8"}),
-    `daari-deepa-target-counts-${new Date().toISOString().slice(0, 10)}.csv`);
+    `daarideepa-target-counts-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 function renderWindows(data) {
@@ -1824,7 +1824,7 @@ function downloadActivePlot() {
     if (!url) throw new Error("Open a rendered plot before exporting it.");
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `daari-deepa-${lens}-${new Date().toISOString().slice(0, 10)}.png`;
+    anchor.download = `daarideepa-${lens}-${new Date().toISOString().slice(0, 10)}.png`;
     anchor.click();
     const layout = talkGrid(spec.product || {panelCount: 1});
     setStatus("ready", "Talk-ready PNG exported", `${layout.panelCount} panel${layout.panelCount === 1 ? "" : "s"} · fixed 2-column sheet · 1600 × 900 pixels per panel.`);
@@ -2035,7 +2035,7 @@ async function copyRecipe() {
 function downloadRecipe() {
   if (!byId("recipe-json").value.trim()) captureRecipe();
   const blob = new Blob([byId("recipe-json").value], {type: "application/json"});
-  downloadBlob(blob, `daari-deepa-view-${new Date().toISOString().slice(0, 10)}.json`);
+  downloadBlob(blob, `daarideepa-view-${new Date().toISOString().slice(0, 10)}.json`);
 }
 
 function escapeHtml(value) {
@@ -2111,16 +2111,22 @@ async function captureNativeReport() {
   const embeddedRecipe = JSON.stringify(currentRecipe()).replaceAll("<", "\\u003c");
   const analyticalTables = JSON.stringify({choice: products.roi?.choice || [], statistics: products.statistics,
     windows: products.windows, summary: lastSummary}).replaceAll("<", "\\u003c");
-  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Daari Deepa native report</title>
+  const mark = document.querySelector(".rail-brand-logo");
+  const logo = document.createElement("canvas");
+  logo.width = logo.height = 96;
+  const logoContext = logo.getContext("2d");
+  if (mark?.complete && mark.naturalWidth && logoContext) logoContext.drawImage(mark, 0, 0, 96, 96);
+  const logoUrl = logo.toDataURL("image/png");
+  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>daarideepa native report</title>
     <style>body{margin:24px auto;max-width:1840px;padding:0 24px;color:#18221f;background:#f4f1ea;font:15px system-ui}h1,h2{font-family:Georgia,serif;font-weight:500}header{border-bottom:1px solid #ccc;padding-bottom:16px}.figure{margin:24px 0;padding:16px;background:#fffdf8;border:1px solid #d9d5ca;border-radius:12px;overflow:hidden}.figure h2{margin:0 0 6px}.figure-stage{position:relative;overflow:hidden;min-height:280px;border:1px solid #e5e1d8;background:#fff;cursor:grab;touch-action:none}.figure-stage:active{cursor:grabbing}.figure img{display:block;width:100%;height:auto;image-rendering:auto;transform-origin:0 0;will-change:transform;user-select:none}.figure-hint{display:block;margin:0 0 9px;color:#6b7672}#flow-live{display:block;width:100%;height:auto;background:#fff;border:1px solid #e5e1d8}small{color:#66716d}.statistics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.statistics-card{padding:12px;border:1px solid #ddd;border-radius:8px}table{width:100%;border-collapse:collapse}th,td{padding:5px;border-top:1px solid #eee;text-align:left;font-size:12px}@media print{body{max-width:none;margin:0;padding:0;background:#fff}.figure{break-before:page;border:0;border-radius:0;margin:0;padding:12mm;overflow:visible}.figure-stage{min-height:0;overflow:visible;border:0}.figure img{max-width:100%;transform:none!important;page-break-inside:avoid}#flow-live{display:none}}</style>
-    <header><h1>Daari Deepa — native analysis report</h1><p>${escapeHtml(datasetHeader.pattern)}</p><small>${formatCount(counts.retainedRows)} retained of ${formatCount(counts.sourceRows)} source rows · ${formatCount(counts.segments)} loaded segments · ${formatCount(lastSummary?.visibleSegments || 0)} visible segments · ${formatCount(counts.animals)} animals. Distribution displays use p99 upper limits; calculations retain outliers.</small></header>
+    <header><h1><img src="${logoUrl}" alt="" width="48" height="48" style="vertical-align:middle;margin-right:10px">daarideepa analysis report</h1><p>${escapeHtml(datasetHeader.pattern)}</p><small>${formatCount(counts.retainedRows)} retained of ${formatCount(counts.sourceRows)} source rows · ${formatCount(counts.segments)} loaded segments · ${formatCount(lastSummary?.visibleSegments || 0)} visible segments · ${formatCount(counts.animals)} animals. Distribution displays use p99 upper limits; calculations retain outliers.</small></header>
     <script type="application/json" id="view-recipe">${embeddedRecipe}</script><script type="application/json" id="analysis-tables">${analyticalTables}</script>
     ${figures.map(([title, image]) => `<section class="figure"><h2>${escapeHtml(title)}</h2><small class="figure-hint">Drag to pan · wheel to zoom · double-click to reset</small><div class="figure-stage"><img draggable="false" src="${image}" alt="${escapeHtml(title)}"></div>${title === "Local direction" && flowSnapshot ? '<canvas id="flow-live" aria-label="Animated local direction field"></canvas>' : ""}</section>`).join("")}
     ${tableSections.map(([title, content]) => `<section class="figure"><h2>${escapeHtml(title)}</h2>${content}</section>`).join("")}
     <footer><small>Exported ${escapeHtml(new Date().toISOString())}. Images retain local pan and zoom; the flow field is animated from the exported binned vectors. No data leaves this file.</small></footer>
     <script>const FLOW=${embeddedFlow};document.querySelectorAll('.figure-stage').forEach(stage=>{const image=stage.querySelector('img');let scale=1,x=0,y=0,drag=null;const draw=()=>image.style.transform='translate('+x+'px,'+y+'px) scale('+scale+')';stage.addEventListener('wheel',event=>{event.preventDefault();const rect=stage.getBoundingClientRect(),next=Math.max(1,Math.min(8,scale*Math.exp(-event.deltaY*.001)));x=event.clientX-rect.left-(event.clientX-rect.left-x)*next/scale;y=event.clientY-rect.top-(event.clientY-rect.top-y)*next/scale;scale=next;draw()},{passive:false});stage.addEventListener('pointerdown',event=>{drag={x:event.clientX,y:event.clientY,ox:x,oy:y};stage.setPointerCapture(event.pointerId)});stage.addEventListener('pointermove',event=>{if(!drag)return;x=drag.ox+event.clientX-drag.x;y=drag.oy+event.clientY-drag.y;draw()});stage.addEventListener('pointerup',()=>drag=null);stage.addEventListener('dblclick',()=>{scale=1;x=0;y=0;draw()})});if(FLOW){const canvas=document.getElementById('flow-live'),cols=Math.min(2,FLOW.panelCount),rows=Math.ceil(FLOW.panelCount/cols),cellW=800,cellH=450;canvas.width=cols*cellW;canvas.height=rows*cellH;const ctx=canvas.getContext('2d'),cells=FLOW.nx*FLOW.nz,active=[];let max=1;for(const value of FLOW.abundance)max=Math.max(max,value||0);for(let i=0;i<FLOW.angle.length;i++){if(FLOW.angle[i]==null||!(FLOW.abundance[i]>0))continue;const copies=1+Math.floor(3*Math.sqrt(FLOW.abundance[i]/max));for(let n=0;n<copies;n++)active.push(i)}const particles=Array.from({length:Math.min(3500,active.length*2)},(_,i)=>({cell:active[i%active.length],phase:(i*.61803398875)%1,jitter:((i*16807)%997)/997-.5}));const bounds=FLOW.bounds,pad=34,plotW=cellW-pad*2,plotH=cellH-pad*2,centerX=(bounds.xmin+bounds.xmax)/2,centerZ=(bounds.zmin+bounds.zmax)/2,pixelsPerWorld=Math.min(plotW/Math.max(1e-9,bounds.xmax-bounds.xmin),plotH/Math.max(1e-9,bounds.zmax-bounds.zmin));function frame(time){ctx.fillStyle='rgba(255,255,255,.18)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.lineCap='round';for(let panel=0;panel<FLOW.panelCount;panel++){const left=(panel%cols)*cellW+pad,top=Math.floor(panel/cols)*cellH+pad;ctx.fillStyle='#26332f';ctx.font='700 15px system-ui';ctx.fillText(FLOW.panelNames[panel]||'All data',left,top-10);ctx.strokeStyle='rgba(60,80,74,.12)';ctx.strokeRect(left,top,plotW,plotH)}for(const p of particles){const panel=Math.floor(p.cell/cells),local=p.cell%cells,ix=local%FLOW.nx,iz=Math.floor(local/FLOW.nx),angle=FLOW.angle[p.cell]*Math.PI/180,strength=FLOW.strength[p.cell]||0,age=(time*.00024+p.phase)%1,cx=FLOW.x0+(ix+.5)*FLOW.bin,cz=FLOW.z0+(iz+.5)*FLOW.bin,length=FLOW.bin*(.3+1.4*strength),dx=Math.sin(angle)*length,dz=Math.cos(angle)*length,left=(panel%cols)*cellW+pad,top=Math.floor(panel/cols)*cellH+pad,px=value=>left+plotW/2+(value-centerX)*pixelsPerWorld,py=value=>top+plotH/2-(value-centerZ)*pixelsPerWorld,x0=px(cx+dx*(age-.18)+p.jitter*FLOW.bin*.35),y0=py(cz+dz*(age-.18)+p.jitter*FLOW.bin*.35),x1=px(cx+dx*age+p.jitter*FLOW.bin*.35),y1=py(cz+dz*age+p.jitter*FLOW.bin*.35);ctx.strokeStyle='oklch(66% .135 '+(((FLOW.angle[p.cell]%360)+360)%360)+')';ctx.globalAlpha=.18+.55*strength;ctx.lineWidth=.7+1.2*Math.sqrt(FLOW.abundance[p.cell]/max);ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke()}ctx.globalAlpha=1;requestAnimationFrame(frame)}if(active.length)requestAnimationFrame(frame)}</script>`;
   const blob = new Blob([html], {type: "text/html"});
-  downloadBlob(blob, `daari-deepa-native-${new Date().toISOString().slice(0,10)}.html`);
+  downloadBlob(blob, `daarideepa-report-${new Date().toISOString().slice(0,10)}.html`);
   setStatus("ready", "Report exported", `${figures.length} figures embedded locally, including ${formatCount(trajectoryRenderer.lastSnapshotInk || 0)} sampled trajectory pixels.`);
   } catch (error) {
     setStatus("error", "Report export failed", error.message || String(error));
@@ -2383,6 +2389,7 @@ function stopPlayback(reset = false) {
 }
 
 byId("source-form").addEventListener("submit", event => { event.preventDefault(); loadDataset(sourceInput.value); });
+byId("load-demo-button").addEventListener("click", () => loadDataset("daarideepa:demo"));
 byId("controls-toggle").addEventListener("click", () => {
   const collapsed = shell.classList.toggle("controls-collapsed");
   if (collapsed) setMirrorGuide(null);
@@ -2892,7 +2899,7 @@ function startLiveMode() {
   byId("source-popover").hidden = true;
   byId("live-controls").hidden = false;
   byId("live-link").hidden = true;
-  document.title = "Daari Deepa · Live MATREX trajectories";
+  document.title = "daarideepa · Live MATREX trajectories";
   setStatus("ready", "Waiting for publisher", "Open Live for connection and rig status.");
   mountLiveControls({
     receive(data, frame, context, status) {

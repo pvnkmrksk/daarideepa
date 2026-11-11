@@ -23,9 +23,11 @@ def test_four_platform_hub_and_checksums(tmp_path):
     builder.build(downloads, output, "0123456789abcdef" * 2 + "01234567")
     page = (output / "index.html").read_text()
     for source in downloads.glob("*.zip"):
-        assert source.name in page
-        assert (output / source.name).read_bytes() == source.read_bytes()
-        assert len((output / (source.name + ".sha256")).read_text().split()[0]) == 64
+        filename = source.name.lower()
+        assert filename in page
+        assert (output / filename).read_bytes() == source.read_bytes()
+        assert len((output / (filename + ".sha256")).read_text().split()[0]) == 64
+    assert (output / "daarideepa.png").is_file()
     assert len((output / "SHA256SUMS.txt").read_text().splitlines()) == 4
 
 

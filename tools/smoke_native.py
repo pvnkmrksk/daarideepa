@@ -97,7 +97,9 @@ try:
         "/static/live.js",
         "/static/live_dataset.js",
         "/static/live.css",
-        "/static/live_model.js",
+        "/static/daarideepa.png",
+        "/static/replay.js",
+        "/static/replay_model.js",
         "/static/renderers.js",
         "/static/echarts_renderers.js",
         "/static/icons/pause.svg",
@@ -140,6 +142,18 @@ try:
             "Recorded duration must remain seconds, not a changed datetime integer unit"
         )
         assert header["categories"]["animal"] == ["animal-7@VR1"]
+    demo_request = Request(
+        base + "/api/load",
+        data=json.dumps({"source": "daarideepa:demo"}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urlopen(demo_request, timeout=15) as response:
+        demo_payload = response.read()
+    demo_length = struct.unpack_from("<I", demo_payload, 0)[0]
+    demo = json.loads(demo_payload[4 : 4 + demo_length])
+    assert demo["pattern"] == "daarideepa:demo"
+    assert demo["counts"]["files"] == 8 and demo["counts"]["segments"] == 40
+    assert len(demo["rois"]) == 2
     print(
         json.dumps(
             {
@@ -153,6 +167,7 @@ try:
                 "sharedDashboardShell": True,
                 "recordedDurationSeconds": header["playbackMax"],
                 "canonicalAnimalIdentity": True,
+                "bundledSampleSegments": demo["counts"]["segments"],
             }
         )
     )

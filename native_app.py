@@ -43,7 +43,7 @@ def _args():
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
-        parser.error("--port must be between1 and65535")
+        parser.error("--port must be between 1 and 65535")
     return args
 
 
@@ -68,7 +68,7 @@ def main():
     url = f"http://{host}:{args.port}/" + (
         "live/" if args.live_only or args.telemetry else ""
     )
-    print("Daari Deepa — " + url, flush=True)
+    print("daarideepa — " + url, flush=True)
     if (args.open_browser or getattr(sys, "frozen", False)) and not args.no_browser:
         timer = threading.Timer(1.0, lambda: webbrowser.open(url))
         timer.daemon = True

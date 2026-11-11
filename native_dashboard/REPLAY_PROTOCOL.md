@@ -1,6 +1,6 @@
 # Recorded replay link
 
-MATREX VR may open a separate Daari Deepa process on loopback port 8061. The ordinary analysis app and live viewer on 8060 keep their existing behavior. The recorded view opens at `/replay/#token=<owner nonce>`; it uses the same compiled native dataset and `TrajectoryRenderer`, with a faint complete path, bright past path and current heading cursor.
+MATREX VR may open a separate daarideepa process on loopback port 8061. The ordinary analysis app and live viewer on 8060 keep their existing behavior. The recorded view opens at `/replay/#token=<owner nonce>`; it uses the same compiled native dataset and `TrajectoryRenderer`, with a faint complete path, bright past path and current heading cursor.
 
 Unity owns the clock. The browser sends seek/play/pause requests and displays acknowledged Unity state. It does not run a competing playback timer or publish acquisition telemetry. Spatial pan/zoom stays local; Fit restores trajectory bounds. Loading errors require an explicit Reload rather than retrying expensive dataset compilation repeatedly.
 

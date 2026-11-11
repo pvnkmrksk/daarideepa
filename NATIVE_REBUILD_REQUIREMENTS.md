@@ -2,7 +2,7 @@
 
 ## Objective
 
-Rebuild Daari Deepa's interactive presentation layer so that a loaded dataset
+Rebuild daarideepa's interactive presentation layer so that a loaded dataset
 feels immediate during exploration. Keep the proven Python loader, segment
 model, metadata recovery, vectorised filters, and exact per-segment summaries
 as the reference analysis pipeline for the first migration stage. Remove Dash

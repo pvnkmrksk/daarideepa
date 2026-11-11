@@ -120,11 +120,7 @@ The ZIP contains the entire one-folder application, Python/runtime libraries,
 ZeroMQ and the static browser assets. Preserve the whole directory. The native
 launcher opens a browser automatically unless passed `--no-browser`. macOS and
 Linux also include a shell launcher. Unsigned builds do not add code signing
-or installers. GitHub Actions stores the four platform artifacts without
-creating a release. Passing main-branch packages are additionally published
-at [the static download hub](https://pvnkmrksk.github.io/trajectory-dashboard/)
-with commit and checksum evidence, so downloading does not require a GitHub
-account or depend on artifact retention.
+or installers. The [installation guide](docs/install.md) links to tagged releases and explains how to launch the standalone packages.
 
 `python tools/smoke_native.py dist/DaariDeepa/DaariDeepa` checks the built
 application with Python removed from its PATH: real ZeroMQ handshake, context

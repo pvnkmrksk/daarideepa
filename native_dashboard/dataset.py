@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+from pathlib import Path
 import struct
 import threading
 from typing import Any
@@ -31,6 +32,8 @@ from trajectory_dashboard.filters import (
 from trajectory_dashboard.roi import rois_by_config
 
 
+DEMO_SOURCE = "daarideepa:demo"
+DEMO_DIR = Path(__file__).resolve().parents[1] / "examples" / "demo"
 FORMAT_NAME = "trajectory-native-columns"
 FORMAT_VERSION = 2
 _CACHE_MAX = 2
@@ -461,7 +464,7 @@ def _load_reference_dataset(pattern: str):
     import csv
     import gzip
 
-    discovered_files = td_io.find_csv_files(pattern)
+    discovered_files = td_io.find_csv_files(str(DEMO_DIR) if pattern == DEMO_SOURCE else pattern)
     if not discovered_files:
         raise NativeDatasetError("No trajectory CSV files matched this source.")
     # Simulator/sensor CSVs may be much larger than trajectory recordings.
@@ -835,7 +838,7 @@ def load_native_dataset(pattern: str) -> NativeDataset:
     pattern = str(pattern or "").strip()
     if not pattern:
         raise NativeDatasetError("Enter a CSV file, folder, or recursive glob.")
-    files = td_io.find_csv_files(pattern)
+    files = td_io.find_csv_files(str(DEMO_DIR) if pattern == DEMO_SOURCE else pattern)
     # Geometry/identity metadata can change without touching a recording.
     # Include it in the warm-cache signature so corrected targets are used.
     metadata_files = [

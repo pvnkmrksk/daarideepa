@@ -34,13 +34,14 @@ import plotly.colors as pcolors
 from scipy import stats as scipy_stats
 from plotly.subplots import make_subplots
 from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
-from flask import request
+from flask import request, send_file
 
 from trajectory_dashboard import grouping as td_grouping
 from trajectory_dashboard import io as td_io
 from trajectory_dashboard import ui_contract as td_ui
 
-REPO_URL = "https://github.com/pvnkmrksk/trajectory-dashboard"
+REPO_URL = "https://github.com/pvnkmrksk/daarideepa"
+LOGO_FILE = Path(__file__).resolve().parent / "native_dashboard" / "static" / "daarideepa.png"
 LOGGER = logging.getLogger("trajectory_dashboard")
 
 
@@ -8039,7 +8040,15 @@ app = Dash(
     update_title="Working…",
     on_error=_dash_error_handler,
 )
-app.title = "Daari Deepa"
+app.title = "daarideepa"
+app.index_string = app.index_string.replace(
+    "{%favicon%}", '<link rel="icon" href="/daarideepa-icon.png" type="image/png">'
+)
+
+
+@app.server.get("/daarideepa-icon.png")
+def _daarideepa_icon():
+    return send_file(LOGO_FILE)
 
 
 @app.server.before_request
@@ -8568,8 +8577,9 @@ app.layout = html.Div([
 
     # Header
     html.Div([
+        html.Img(src="/daarideepa-icon.png", alt="", width=26, height=26),
         html.H3(
-                "Daari Deepa",
+                "daarideepa",
                 title=(
                     "Kannada: a lamp for the path — illuminating trajectories "
                     "so their routes and transitions can be understood."
@@ -10204,7 +10214,7 @@ globals().update(register_callbacks(globals()))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Daari Deepa — interactive trajectory analysis",
+        description="daarideepa — interactive trajectory analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

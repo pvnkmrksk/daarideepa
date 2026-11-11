@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f3f6f6">
-  <title>Daari Deepa — native trajectory explorer</title>
+  <title>daarideepa — native trajectory explorer</title>
   <meta name="description" content="A Plotly-free, browser-native explorer for VR trajectory experiments.">
+  <link rel="icon" href="/static/daarideepa.png" type="image/png">
   <link rel="stylesheet" href="/static/dashboard.css">
   <link rel="stylesheet" href="/static/live.css">
 </head>
@@ -14,10 +15,10 @@
     <aside class="sidebar" id="analysis-sidebar" aria-label="Analysis controls">
       <header class="sidebar-brand">
       <div class="brand-block">
-        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <img class="brand-mark" src="/static/daarideepa.png" alt="">
         <div>
           <div class="eyebrow">Trajectory explorer</div>
-          <h1>Daari&nbsp;Deepa <span>Native</span></h1>
+          <h1>daarideepa</h1>
         </div>
       </div>
         <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="Close controls">‹</button>
@@ -29,6 +30,7 @@
         <button class="quiet" id="reset-view-button" type="button" disabled>Reset view</button>
         <button class="quiet" id="clean-button" type="button">Clean view</button>
         <button class="quiet wide" id="export-button" type="button" disabled>Export native report</button>
+        <a class="quiet wide" href="https://github.com/pvnkmrksk/daarideepa/blob/main/docs/manual.md" target="_blank" rel="noreferrer">Settings manual ↗</a>
       </div>
 
       <section class="control-card summary-card">
@@ -235,7 +237,7 @@
     <main class="workspace" id="workspace">
       <nav class="view-rail" aria-label="Analysis views">
         <button class="icon-button rail-menu" id="controls-toggle" type="button" aria-expanded="false" aria-controls="analysis-sidebar" aria-label="Open analysis controls">☰</button>
-        <div class="rail-brand" aria-label="Daari Deepa"><span class="rail-brand-lamp" aria-hidden="true"></span><b>Daari Deepa</b></div>
+        <div class="rail-brand" aria-label="daarideepa"><img class="rail-brand-logo" src="/static/daarideepa.png" alt=""><b>daarideepa</b></div>
         <button class="icon-button rail-step" id="view-prev" type="button" aria-label="Previous view">‹</button>
         <div class="view-rail-track" title="Scroll here or use ↑/↓ to move between workspaces. Within Explore, use ←/→ for Paths, Occupancy, Flow, Polar, Transitions, and Overview.">
           <button type="button" data-view-button="trajectory" class="active">Explore</button>
@@ -258,6 +260,7 @@
               <input id="source-input" name="source" autocomplete="off" placeholder="Drop a folder, or enter its path">
               <button class="primary" id="load-button" type="submit">Load</button>
             </div>
+            <button class="quiet" id="load-demo-button" type="button">Load sample</button>
           </form>
         </details>
         <details class="source-popover live-controls" id="live-controls" hidden>
@@ -290,7 +293,7 @@
         </details>
         <div class="status-dock" id="status-dock" role="status" aria-live="polite" aria-atomic="true" aria-describedby="status-detail" tabindex="0" title="Waiting for data">
           <span class="status-light" aria-hidden="true"></span><b id="status-title">Waiting for data</b>
-          <small id="status-detail">Drop a folder anywhere or choose a source.</small>
+          <small id="status-detail">Load the sample from Source, enter a path, or drop a folder here.</small>
           <progress id="load-progress" max="100" value="0" hidden aria-label="Dataset loading progress"></progress>
         </div>
         <button class="rail-action" id="download-plot-button" type="button">PNG</button>
