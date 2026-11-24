@@ -4,6 +4,9 @@ const NEUTRAL_INDEX = 20;
 const SEQUENTIAL_OFFSET = 24;
 const CATEGORY_COLORS = 16;
 const FLIGHT_COLORS = [NEUTRAL_INDEX, 56, 57];
+// The low six bits are the existing palette index. Keep this flag on each
+// drawn link so changing flight emphasis needs no worker round trip.
+const NON_FLYING_COLOR_BIT = 64;
 const DEFAULT_MINIMUM_FLIGHT = 80;
 const DEFAULT_TORTUOSITY_RANGE = [1, 2];
 let currentFlight = null;
@@ -995,11 +998,16 @@ function buildTrajectory(state, analysis) {
   const segments = new Uint32Array(selectedLinks * 2);
   const times = new Float32Array(selectedLinks * 2);
   const samples = new Float32Array(selectedLinks * 2);
+  const flightStatus = currentFlight?.status;
   let link = 0;
   for (const {seg, from, to, count} of runs) {
     let position = 0, previous = -1;
+    let nonFlying = Boolean(flightStatus);
     const sample = hashSample(seg, state.sampleSeed || 0);
     for (let i = from; i < to; i += 1) {
+      // Only dim when every source interval in a downsampled link is known
+      // non-flying. The interval beginning at the link's endpoint is next.
+      if (nonFlying && i > from && flightStatus[i - 1] !== 1) nonFlying = false;
       if (!analysis.rowKeep[i] || !eligibleForDrawing(i, state)) continue;
       const select = position === 0 || position === count - 1 || position % stride === 0;
       if (select) {
@@ -1008,8 +1016,9 @@ function buildTrajectory(state, analysis) {
           vertices[v] = activeX[previous]; vertices[v + 1] = activeZ[previous];
           vertices[v + 2] = activeX[i]; vertices[v + 3] = activeZ[i];
           panels[a] = analysis.segmentPanel[seg]; panels[a + 1] = analysis.segmentPanel[seg];
-          colors[a] = rowColor(previous, seg, state, analysis);
-          colors[a + 1] = state.colorBy === "flight" ? colors[a] : rowColor(i, seg, state, analysis);
+          const dim = nonFlying ? NON_FLYING_COLOR_BIT : 0;
+          colors[a] = rowColor(previous, seg, state, analysis) | dim;
+          colors[a + 1] = state.colorBy === "flight" ? colors[a] : rowColor(i, seg, state, analysis) | dim;
           animals[a] = data.segmentAnimal[seg]; animals[a + 1] = data.segmentAnimal[seg];
           segments[a] = seg; segments[a + 1] = seg;
           times[a] = data.time[previous]; times[a + 1] = data.time[i];
@@ -1017,6 +1026,7 @@ function buildTrajectory(state, analysis) {
           link += 1;
         }
         previous = i;
+        nonFlying = Boolean(flightStatus);
       }
       position += 1;
     }
@@ -1522,11 +1532,14 @@ function buildHeading(state, analysis) {
   }
   const stride = Math.max(1, Math.ceil(totalLinks / 80000));
   const vertices = [], panels = [], colors = [], samples = [], animals = [], trials = [], steps = [];
+  const flightStatus = currentFlight?.status;
   for (const seg of analysis.visibleSegments) {
     let position = 0, previous = -1, previousAngle = NaN;
+    let nonFlying = Boolean(flightStatus);
     const sample = hashSample(seg, state.sampleSeed || 0);
     const color = unitColor(seg, state, analysis);
     for (let row = starts[seg]; row < ends[seg]; row += 1) {
+      if (nonFlying && row > starts[seg] && flightStatus[row - 1] !== 1) nonFlying = false;
       if (analysis.breakBefore?.[row]) { previous = -1; previousAngle = NaN; }
       const a = heading[row];
       if (!analysis.rowKeep[row] || !Number.isFinite(a) || data.time[row] > maxTime
@@ -1537,12 +1550,14 @@ function buildHeading(state, analysis) {
           vertices.push(data.time[previous], previousAngle, data.time[row], a);
           panels.push(analysis.segmentPanel[seg], analysis.segmentPanel[seg]);
           const linkColor = state.colorBy === "flight" ? rowColor(previous, seg, state, analysis) : color;
-          colors.push(linkColor, linkColor); samples.push(sample, sample);
+          const shadedColor = linkColor | (nonFlying ? NON_FLYING_COLOR_BIT : 0);
+          colors.push(shadedColor, shadedColor); samples.push(sample, sample);
           animals.push(data.segmentAnimal[seg], data.segmentAnimal[seg]);
           trials.push(data.segmentTrial[seg], data.segmentTrial[seg]);
           steps.push(data.segmentStep[seg], data.segmentStep[seg]);
         }
         previous = row; previousAngle = a;
+        nonFlying = Boolean(flightStatus);
       }
       position += 1;
     }
@@ -2272,7 +2287,7 @@ function compute(message) {
     products.heading = cachedProduct("heading", productAnalysis, JSON.stringify([
       state.angleSource, state.movingOnly, state.walkThreshold, state.headingMode,
       state.headingBin, state.headingSectors, state.colorBy, state.sampleSeed,
-      state.panelColumns, state.playbackPercentile, state.colorBy === "flight" ? flightThreshold(state) : null,
+      state.panelColumns, state.playbackPercentile, flightThreshold(state),
     ]), () => buildHeading(state, productAnalysis));
   }
   if (["full", "statistics", "metrics", "background"].includes(scope)) {

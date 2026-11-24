@@ -3,6 +3,9 @@ const PANEL_PAD_Y = 0.065;
 const CATEGORY_COLORS = 16;
 export const NEUTRAL_INDEX = 20;
 export const SEQUENTIAL_OFFSET = 24;
+export const NON_FLYING_COLOR_BIT = 64;
+export const NON_FLYING_OPACITY = .72;
+const NON_FLYING_SATURATION = .12;
 
 const CATEGORICAL = [
   "#246b78", "#c95b3f", "#71813f", "#7a5b91", "#c58b2f", "#3f7a5d",
@@ -39,6 +42,13 @@ function hexRgb(color) {
   if (color.startsWith("rgb")) return color.match(/[\d.]+/g).slice(0, 3).map(Number);
   const value = color.replace("#", "");
   return [0, 2, 4].map(i => parseInt(value.slice(i, i + 2), 16));
+}
+
+export function desaturateNonFlying(color) {
+  const [r, g, b] = hexRgb(color);
+  const gray = .2126 * r + .7152 * g + .0722 * b;
+  return `rgb(${[r, g, b].map(channel =>
+    Math.round(gray + (channel - gray) * NON_FLYING_SATURATION)).join(",")})`;
 }
 
 const PALETTE_FLOATS = new Float32Array(PALETTE.flatMap(color => {
@@ -854,6 +864,7 @@ export class TrajectoryRenderer extends SpatialBase {
     this.sequentialThrough = -1;
     this.lineWidth = 1.1;
     this.lineOpacity = .5;
+    this.dimNonFlying = false;
     this._marginalProfiles = null;
     this._initGl();
     installSpatialInteraction(this, this.overlay);
@@ -879,6 +890,7 @@ export class TrajectoryRenderer extends SpatialBase {
       uniform float u_selected_segment;
       uniform float u_line_width;
       uniform float u_opacity;
+      uniform bool u_dim_non_flying;
       uniform sampler2D u_ring_entries;
       uniform float u_ring_enabled;
       uniform float u_ring_context;
@@ -929,9 +941,15 @@ export class TrajectoryRenderer extends SpatialBase {
         bool ringVisible = u_ring_enabled < .5 || ringMatch || contextPath;
         float vertexTime = atEnd ? a_time.y : a_time.x;
         bool beforeRing = u_ring_enabled > .5 && ringMatch && vertexTime < ringEntry;
-        int colorIndex = (beforeRing || contextPath) ? 20 : clamp(int(a_color + .5), 0, 63);
+        int packedColor = int(a_color + .5);
+        int colorIndex = (beforeRing || contextPath) ? 20 : (packedColor & 63);
         v_color = u_palette[colorIndex];
         v_color.a = u_opacity * (contextPath ? .10 : (colorIndex == 20 ? .72 : 1.0));
+        if (u_dim_non_flying && (packedColor & ${NON_FLYING_COLOR_BIT}) != 0 && !beforeRing && !contextPath) {
+          float gray = dot(v_color.rgb, vec3(.2126, .7152, .0722));
+          v_color.rgb = mix(vec3(gray), v_color.rgb, ${NON_FLYING_SATURATION});
+          v_color.a *= ${NON_FLYING_OPACITY};
+        }
         bool selected = u_selected_segment < 0.0 || abs(a_segment_id - u_selected_segment) < .5;
         v_inside = (a_sample <= u_fraction && a_time.x <= u_time && a_visible > .5
           && selected && ringVisible) ? 1.0 : 0.0;
@@ -950,7 +968,7 @@ export class TrajectoryRenderer extends SpatialBase {
     `);
     this.uniforms = Object.fromEntries([
       "u_view", "u_grid", "u_canvas", "u_pane", "u_fraction", "u_time",
-      "u_selected_segment", "u_line_width", "u_opacity", "u_ring_entries",
+      "u_selected_segment", "u_line_width", "u_opacity", "u_dim_non_flying", "u_ring_entries",
       "u_ring_enabled", "u_ring_context", "u_ring_texture_width", "u_palette[0]",
     ].map(name => [name, gl.getUniformLocation(this.program, name)]));
     gl.useProgram(this.program);
@@ -1180,6 +1198,11 @@ export class TrajectoryRenderer extends SpatialBase {
     this.lineOpacity = Math.max(.03, Math.min(1, Number(opacity) || .5));
     this.drawGl();
   }
+  setDimNonFlying(enabled, redraw = true) {
+    if (this.dimNonFlying === enabled) return;
+    this.dimNonFlying = enabled;
+    if (redraw && this.data) this.draw();
+  }
   setObservationWindows(windows) {
     if (!this.data) return;
     this.data.windows = (windows || []).map(window => ({...window}));
@@ -1221,6 +1244,7 @@ export class TrajectoryRenderer extends SpatialBase {
     gl.uniform1f(this.uniforms.u_selected_segment, this.selectedSegment);
     gl.uniform1f(this.uniforms.u_line_width, this.lineWidth);
     gl.uniform1f(this.uniforms.u_opacity, this.lineOpacity);
+    gl.uniform1i(this.uniforms.u_dim_non_flying, this.dimNonFlying ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.ringTexture);
     gl.uniform1i(this.uniforms.u_ring_entries, 0);
@@ -1293,6 +1317,21 @@ export class TrajectoryRenderer extends SpatialBase {
           if (stacked) y += 17;
           else x += widths[index];
         }
+        this.ctx.restore();
+      }
+      if (!this.cleanMode && this.dimNonFlying) {
+        const layout = panelLayout(this.width, this.height, this.data.panelCount, this.data.columns);
+        const pane = panelPane(layout, 0), label = "Muted · not flying";
+        const right = pane.right - 6, bottom = pane.bottom - 6;
+        this.ctx.save();
+        this.ctx.font = "11px system-ui, sans-serif";
+        this.ctx.textAlign = "right";
+        this.ctx.textBaseline = "bottom";
+        const width = this.ctx.measureText(label).width;
+        this.ctx.fillStyle = "rgba(255,255,255,.92)";
+        this.ctx.fillRect(right - width - 8, bottom - 16, width + 12, 19);
+        this.ctx.fillStyle = "#52645e";
+        this.ctx.fillText(label, right, bottom);
         this.ctx.restore();
       }
     }

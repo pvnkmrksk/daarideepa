@@ -98,9 +98,10 @@ def test_flight_gates_complete_trials_in_plots_and_metrics_and_reclassifies_on_o
       const lenient = analyze("metrics", {minimumFlightPercent:70});
       const behind = analyze("metrics", {ranges:{time:[.8,1]}});
       [paths.summary.visibleRows, paths.products.trajectory.segmentLabels,
-       paths.products.trajectory.colors, metrics.products.metrics.trial,
+       paths.products.trajectory.colors.map(color => color & 63), metrics.products.metrics.trial,
        override.products.trajectory.segmentLabels, inspection.flightFraction,
-       [...new Set(all.products.heading.colors)], [...new Set(overriddenHeading.products.heading.colors)],
+       [...new Set(all.products.heading.colors.map(color => color & 63))],
+       [...new Set(overriddenHeading.products.heading.colors.map(color => color & 63))],
        lenient.products.metrics.trial, behind.products.metrics.trial];
     """, dataset.binary)
     assert actual[0] == 11
@@ -111,6 +112,36 @@ def test_flight_gates_complete_trials_in_plots_and_metrics_and_reclassifies_on_o
     assert actual[5] == pytest.approx(1)
     assert set(actual[6]) == set(actual[7]) == {20, 56, 57}
     assert actual[8:] == [[0, 1], [0]]
+
+
+def test_flight_emphasis_marks_only_known_non_flying_links_and_keeps_base_colours(tmp_path):
+    states = np.full((1, 2002), False, dtype=object)
+    states[0, :3] = [None, False, True]
+    _write_flight_recording(tmp_path / "flight_VR1_.csv", states, np.full(states.shape, .02))
+    dataset = load_native_dataset(str(tmp_path))
+    observed = worker("""
+      initDataset({header:payloadHeader,buffer:binary,bodyOffset:payloadBodyOffset});
+      const state = {groupBy:"all",colorBy:"time",pointBudget:1000,headingMode:"trial"};
+      function analyze(scope, extra={}) {
+        compute({state:{...state,...extra},scope,requestId:1});
+        return messages.at(-1).products[scope];
+      }
+      const paths = analyze("trajectory");
+      const heading = analyze("heading");
+      const override = analyze("heading", {flightVarianceThreshold:.01});
+      const cleared = analyze("heading");
+      [paths.colors.slice(0,6), heading.colors.slice(0,6), override.colors.slice(0,6),
+       cleared.colors.slice(0,6), paths.colorScale.mode];
+    """, dataset.binary)
+    # With a stride of three, the first link contains a mix of states.
+    # Subsequent links keep their time colour and carry just the dim flag.
+    paths, heading, override, cleared, scale = observed
+    assert [value >= 64 for value in paths] == [False, False, True, True, True, True]
+    assert all(24 <= (value & 63) < 56 for value in paths)
+    assert [value >= 64 for value in heading] == [False, False, True, True, False, False]
+    assert override == [value & 63 for value in heading]
+    assert cleared == heading
+    assert scale == "time"
 
 
 def test_flight_fraction_uses_elapsed_time_and_saved_decision_survives_retention(tmp_path, monkeypatch):

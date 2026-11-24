@@ -26,7 +26,7 @@ function load(file, names, extras = {}) {
   vm.runInContext(source + '\nthis.exports = {' + names.join(',') + '};', context);
   return {context, ...context.exports};
 }
-const native = load('renderers.js', ['TrajectoryRenderer', 'PolarRenderer', 'NATIVE_PALETTE', 'NEUTRAL_INDEX', 'SEQUENTIAL_OFFSET', 'formatNumber', 'drawCurrentPoses', 'setDisplayUnits', 'displayUnits']);
+const native = load('renderers.js', ['TrajectoryRenderer', 'PolarRenderer', 'NATIVE_PALETTE', 'NEUTRAL_INDEX', 'SEQUENTIAL_OFFSET', 'NON_FLYING_COLOR_BIT', 'NON_FLYING_OPACITY', 'desaturateNonFlying', 'formatNumber', 'drawCurrentPoses', 'setDisplayUnits', 'displayUnits']);
 const charts = load('echarts_renderers.js', ['EChartsMetricsRenderer', 'EChartsRoiRenderer', 'EChartsHistogramRenderer', 'EChartsPolarRenderer', 'EChartsHeadingRenderer', 'compactLetters'], native);
 function renderer(Type, data) {
   const result = Object.create(Type.prototype);
@@ -64,6 +64,30 @@ assert.equal(Math.max(...boxes.map(box => box[4])), 1e9);
 const cache = chart.metricCache;
 chart.option(); assert.equal(chart.metricCache, cache);
 chart.data = {...data}; chart.option(); assert.notEqual(chart.metricCache, cache);
+""")
+
+
+def test_heading_flight_emphasis_reuses_animal_colour_and_only_mutes_flagged_links():
+    _run_node(r"""
+const baseColor = native.NATIVE_PALETTE[3];
+const flag = native.NON_FLYING_COLOR_BIT;
+const chart = renderer(charts.EChartsHeadingRenderer, {
+  mode:'trial', colorBy:'fly', panelCount:1, panelNames:['Panel'], maxTime:2,
+  animalNames:['Animal'], animalColors:[3], animals:[0,0,0,0], panels:[0,0,0,0],
+  colors:[3,3,3|flag,3|flag], samples:[0,0,0,0], trials:[0,0,0,0], steps:[0,0,0,0],
+  vertices:[0,10,1,20,1,20,2,30],
+});
+const off = chart.option().series;
+assert.equal(off.length, 1);
+assert.equal(off[0].lineStyle.color, baseColor);
+assert.equal(off[0].data.length, 2);
+chart.dimNonFlying = true;
+const on = chart.option().series;
+assert.deepEqual(Array.from(on, series => series.name), ['Animal', 'Animal']);
+assert.equal(on[0].lineStyle.color, baseColor);
+assert.equal(on[1].lineStyle.color, native.desaturateNonFlying(baseColor));
+assert.ok(on[1].lineStyle.opacity < on[0].lineStyle.opacity);
+assert.equal(on[1].data[0].coords[0][0], 1);
 """)
 
 

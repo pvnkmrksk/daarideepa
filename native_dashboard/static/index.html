@@ -145,6 +145,7 @@
       <details class="control-card" id="flight-controls" hidden>
         <summary>Flight</summary>
         <div class="control-body two-up">
+          <label class="check span-two" title="Keep the selected colours and mute known non-flying portions."><input id="dim-non-flying" type="checkbox"> Dim non-flying intervals</label>
           <label class="check span-two"><input id="flight-only" data-scope="full" type="checkbox"> Filter by trial flight time</label>
           <label>Minimum flying (%)<input id="minimum-flight-percent" data-scope="full" type="number" min="0" max="100" step="1" value="80"></label>
           <label>Variance override (rad²)<input id="flight-variance-threshold" data-scope="flight" type="number" min="0" step="any" placeholder="Use saved state" aria-describedby="flight-help"></label>

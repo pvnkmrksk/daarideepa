@@ -1,4 +1,4 @@
-import {NATIVE_PALETTE, NEUTRAL_INDEX, SEQUENTIAL_OFFSET, formatNumber} from "/static/renderers.js";
+import {NATIVE_PALETTE, NEUTRAL_INDEX, SEQUENTIAL_OFFSET, NON_FLYING_COLOR_BIT, NON_FLYING_OPACITY, desaturateNonFlying, formatNumber} from "/static/renderers.js";
 
 const SEQUENTIAL_BAR = Array.from({length: 32}, (_, index) => NATIVE_PALETTE[SEQUENTIAL_OFFSET + index]);
 
@@ -608,12 +608,15 @@ export class EChartsHeadingRenderer extends EChartRenderer {
     }
     const grouped = new Map();
     const colorByFlight = data.colorBy === "flight";
+    const dimNonFlying = this.dimNonFlying && data.mode === "trial";
     for (let i = 0; i < data.panels.length; i += 2) {
       const animal = data.animals[i];
       if (data.samples[i] > this.fraction) continue;
       const panel = data.panels[i];
-      const flightColor = colorByFlight ? data.colors[i] : NEUTRAL_INDEX;
-      const key = `${panel}|${animal}|${flightColor}`;
+      const packedColor = data.colors?.[i] ?? NEUTRAL_INDEX;
+      const flightColor = colorByFlight ? packedColor & (NON_FLYING_COLOR_BIT - 1) : NEUTRAL_INDEX;
+      const dim = dimNonFlying && (packedColor & NON_FLYING_COLOR_BIT) !== 0;
+      const key = `${panel}|${animal}|${flightColor}|${dim ? 1 : 0}`;
       if (!grouped.has(key)) grouped.set(key, []);
       grouped.get(key).push({
         coords: [[data.vertices[i * 2], data.vertices[i * 2 + 1]], [data.vertices[(i + 1) * 2], data.vertices[(i + 1) * 2 + 1]]],
@@ -624,14 +627,16 @@ export class EChartsHeadingRenderer extends EChartRenderer {
     }
     const series = [];
     for (const [key, values] of grouped) {
-      const [panel, animal, flightColor] = key.split("|").map(Number);
+      const [panel, animal, flightColor, dim] = key.split("|").map(Number);
+      const base = colorByFlight ? paletteColor(flightColor) : animalColor(data.animalColors?.[animal] ?? animal);
+      const opacity = data.lineOpacity ?? (data.mode === "mean" ? .82 : .26);
       series.push({
         name: data.animalNames?.[animal] || `Animal ${animal + 1}`,
         type: "lines", coordinateSystem: "cartesian2d", xAxisIndex: panel, yAxisIndex: panel,
         data: values, polyline: false, progressive: 5000, progressiveThreshold: 3000,
-        lineStyle: {color: colorByFlight ? paletteColor(flightColor) : animalColor(data.animalColors?.[animal] ?? animal),
+        lineStyle: {color: dim ? desaturateNonFlying(base) : base,
           width: data.lineWidth ?? (data.mode === "mean" ? 1.8 : .8),
-          opacity: data.lineOpacity ?? (data.mode === "mean" ? .82 : .26)},
+          opacity: dim ? opacity * NON_FLYING_OPACITY : opacity},
         emphasis: {disabled: values.length > 12000},
       });
     }

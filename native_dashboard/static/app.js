@@ -626,6 +626,7 @@ function populateControls(restoreUrl = false) {
     byId("roi-trim").checked = false;
     byId("ring-enabled").checked = false;
     byId("flight-only").checked = false;
+    byId("dim-non-flying").checked = false;
     byId("minimum-flight-percent").value = 80;
     byId("flight-variance-threshold").value = "";
   }
@@ -645,11 +646,25 @@ function syncFlightControls() {
   flightOption.disabled = !available;
   if (!available && byId("color-by").value === "flight") byId("color-by").value = "categorical";
   byId("flight-only").disabled = !available;
+  byId("dim-non-flying").disabled = !available;
   byId("minimum-flight-percent").disabled = !available;
   byId("flight-variance-threshold").disabled = !(available && variance);
   byId("flight-help").textContent = variance
     ? "Blank uses the saved flight decision. An override uses variance above the entered value. Unmeasured time does not count as flying."
     : "This recording has flight decisions. A variance override requires recorded variance. Unmeasured time does not count as flying.";
+  applyFlightEmphasis(false);
+}
+
+function dimNonFlyingEnabled() {
+  const control = byId("dim-non-flying");
+  return !control.disabled && control.checked;
+}
+
+function applyFlightEmphasis(redraw = true) {
+  const enabled = dimNonFlyingEnabled();
+  trajectoryRenderer.setDimNonFlying(enabled, redraw && ["trajectory", "compare"].includes(currentView));
+  headingRenderer.dimNonFlying = enabled;
+  if (redraw && currentView === "heading") headingRenderer.draw(true);
 }
 
 function selectedCodes(key) {
@@ -723,6 +738,7 @@ function collectState() {
     roiEntered: byId("roi-entered").checked,
     roiTrim: byId("roi-trim").checked,
     flightOnly: !byId("flight-only").disabled && byId("flight-only").checked,
+    dimNonFlying: dimNonFlyingEnabled(),
     minimumFlightPercent: Math.min(100, Math.max(0, optionalNumber("minimum-flight-percent") ?? 80)),
     flightVarianceThreshold: byId("flight-variance-threshold").disabled
       ? null : optionalNumber("flight-variance-threshold"),
@@ -798,6 +814,7 @@ function persistState() {
     roiReach: state.roiReach, roiNullProbability: state.roiNullProbability,
     roiEntered: state.roiEntered, roiTrim: state.roiTrim,
     flightOnly: state.flightOnly, minimumFlightPercent: state.minimumFlightPercent,
+    dimNonFlying: state.dimNonFlying,
     flightVarianceThreshold: state.flightVarianceThreshold,
     polarR: state.polarR, polarValidMin: state.polarValidMin,
   }));
@@ -908,6 +925,7 @@ function restoreViewStateFromUrl() {
   try {
     const quality = JSON.parse(params.get("quality") || "{}");
     byId("flight-only").checked = quality.flightOnly === true;
+    byId("dim-non-flying").checked = quality.dimNonFlying === true;
     byId("minimum-flight-percent").value = quality.minimumFlightPercent ?? 80;
     byId("flight-variance-threshold").value = quality.flightVarianceThreshold ?? "";
     const numbers = {jumpThreshold:"jump-threshold",jumpBufferMs:"jump-buffer",minDisplacement:"min-displacement",edgeTrim:"edge-trim",walkThreshold:"walk-threshold",roiReach:"roi-reach",roiNullProbability:"roi-null-probability",polarValidMin:"polar-valid-min"};
@@ -1989,6 +2007,7 @@ function applyRecipeControls(recipe) {
   };
   for (const [key, id] of Object.entries(valueIds)) if (state[key] != null) byId(id).value = state[key];
   byId("flight-only").checked = state.flightOnly === true;
+  byId("dim-non-flying").checked = state.dimNonFlying === true;
   byId("minimum-flight-percent").value = state.minimumFlightPercent ?? 80;
   byId("flight-variance-threshold").value = state.flightVarianceThreshold ?? "";
   syncFlightControls();
@@ -2721,6 +2740,11 @@ byId("plot-host-height").addEventListener("change", () => {
 applyDisplayUnits(false);
 applyPlotHostHeight(false);
 installDevicePixelRatioWatcher();
+
+byId("dim-non-flying").addEventListener("change", () => {
+  applyFlightEmphasis();
+  persistState();
+});
 
 for (const control of document.querySelectorAll("[data-scope]")) {
   control.addEventListener("change", () => {
