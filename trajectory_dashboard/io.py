@@ -43,9 +43,11 @@ SCENE_COLUMN_PRIORITY = (
     "SequenceScene",
 )
 _MISSING_SCENE_LABELS = frozenset({"", "nan", "none", "null", "unknown", "n/a", "na"})
+FLIGHT_COLUMNS = ("flightDetected", "flightVarianceRadiansSquared", "flightThresholdRadiansSquared")
 _ANALYSIS_LOAD_COLUMNS = frozenset({
     *REQUIRED_COLUMNS,
     *SCENE_COLUMN_PRIORITY,
+    *FLIGHT_COLUMNS,
     "ConfigFile", "VR", "Sex", "GameObjectRotY",
     "FlyID", "FlyId", "fly_id", "flyid", "Fly ID",
     "AnimalID", "AnimalId", "animal_id", "Animal ID",
@@ -525,6 +527,7 @@ def load_csv_fast(filepath: str, *, include_numeric: bool = True) -> pd.DataFram
         "GameObjectPosZ", "ConfigFile", "SceneName", "VR", "FlyID", "Sex",
         "SourceFolder", "SourceFile", "_seg_id", "TrialIndex", "AnimalID", "SpeciesName",
         "OriginalCurrentTrial",
+        *FLIGHT_COLUMNS,
     }
     numeric_keep = {
         col for col in df.columns

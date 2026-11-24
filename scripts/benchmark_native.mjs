@@ -1,4 +1,4 @@
-// Usage: node scripts/benchmark_native.mjs dataset.bin [worker.js]
+// Usage: node scripts/benchmark_native.mjs dataset.bin [worker.js] [flight variance threshold]
 // A real retained binary payload exercises the worker without browser timing noise.
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -34,6 +34,24 @@ for (const scope of ['trajectory', 'heatmap', 'direction', 'polar', 'roi', 'stat
     if (scope === 'roi' && response.products.roi.choice) output.choices = response.products.roi.choice;
   }
   output.runs[scope] = {firstMs: timings[0], warmMedianMs: timings.slice(1).sort((a,b) => a-b)[1]};
+}
+if (header.flight?.recorded || header.flight?.variance) {
+  const scenarios = {saved: null};
+  if (header.flight.variance) scenarios.override = Number(process.argv[4] ?? .01);
+  output.flight = {};
+  for (const [mode, flightVarianceThreshold] of Object.entries(scenarios)) {
+    const flightState = {...state, colorBy: 'flight', flightOnly: true, flightVarianceThreshold};
+    function measure(scope) {
+      const start = performance.now();
+      context.self.onmessage({data: {type: 'compute', requestId: ++requestId, scope, state: flightState}});
+      if (response.type === 'error') throw new Error(response.error);
+      return +(performance.now() - start).toFixed(2);
+    }
+    const pathsMs = measure('trajectory');
+    const firstMetricsMs = measure('metrics');
+    output.flight[mode] = {flightVarianceThreshold, pathsMs, firstMetricsMs,
+      warmMetricsMs: measure('metrics'), qualifyingSegments: response.summary.visibleSegments};
+  }
 }
 // Burst updates must leave the last request with exactly its requested category subset.
 const stress = performance.now();

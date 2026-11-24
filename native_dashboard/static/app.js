@@ -625,12 +625,31 @@ function populateControls(restoreUrl = false) {
     byId("roi-entered").checked = false;
     byId("roi-trim").checked = false;
     byId("ring-enabled").checked = false;
+    byId("flight-only").checked = false;
+    byId("minimum-flight-percent").value = 80;
+    byId("flight-variance-threshold").value = "";
   }
+  syncFlightControls();
   renderMirrorPairs();
   byId("transition-split-label").textContent = `Split ${byId("transition-axis").value.toUpperCase()}`;
   renderRingControls();
   animalVisibility = (datasetHeader.categories.animal || []).map(() => true);
   renderAnimalVisibility();
+}
+
+function syncFlightControls() {
+  const {recorded, variance} = datasetHeader?.flight || {};
+  const available = !liveMode && Boolean(recorded || variance);
+  byId("flight-controls").hidden = !available;
+  const flightOption = byId("color-by").querySelector('option[value="flight"]');
+  flightOption.disabled = !available;
+  if (!available && byId("color-by").value === "flight") byId("color-by").value = "categorical";
+  byId("flight-only").disabled = !available;
+  byId("minimum-flight-percent").disabled = !available;
+  byId("flight-variance-threshold").disabled = !(available && variance);
+  byId("flight-help").textContent = variance
+    ? "Blank uses the saved flight decision. An override uses variance above the entered value. Unmeasured time does not count as flying."
+    : "This recording has flight decisions. A variance override requires recorded variance. Unmeasured time does not count as flying.";
 }
 
 function selectedCodes(key) {
@@ -703,6 +722,10 @@ function collectState() {
     roiNullProbability: Math.max(0, Math.min(1, optionalNumber("roi-null-probability") ?? .5)),
     roiEntered: byId("roi-entered").checked,
     roiTrim: byId("roi-trim").checked,
+    flightOnly: !byId("flight-only").disabled && byId("flight-only").checked,
+    minimumFlightPercent: Math.min(100, Math.max(0, optionalNumber("minimum-flight-percent") ?? 80)),
+    flightVarianceThreshold: byId("flight-variance-threshold").disabled
+      ? null : optionalNumber("flight-variance-threshold"),
     ringEnabled: byId("ring-enabled").checked,
     ringContext: byId("ring-context").checked,
     ringMatch: byId("ring-match").value,
@@ -774,6 +797,8 @@ function persistState() {
     movingOnly: state.movingOnly, walkThreshold: state.walkThreshold,
     roiReach: state.roiReach, roiNullProbability: state.roiNullProbability,
     roiEntered: state.roiEntered, roiTrim: state.roiTrim,
+    flightOnly: state.flightOnly, minimumFlightPercent: state.minimumFlightPercent,
+    flightVarianceThreshold: state.flightVarianceThreshold,
     polarR: state.polarR, polarValidMin: state.polarValidMin,
   }));
   params.set("tw", byId("trajectory-width").value); params.set("topacity", byId("trajectory-opacity").value);
@@ -882,6 +907,9 @@ function restoreViewStateFromUrl() {
   } catch (_) { /* malformed optional URL state is ignored */ }
   try {
     const quality = JSON.parse(params.get("quality") || "{}");
+    byId("flight-only").checked = quality.flightOnly === true;
+    byId("minimum-flight-percent").value = quality.minimumFlightPercent ?? 80;
+    byId("flight-variance-threshold").value = quality.flightVarianceThreshold ?? "";
     const numbers = {jumpThreshold:"jump-threshold",jumpBufferMs:"jump-buffer",minDisplacement:"min-displacement",edgeTrim:"edge-trim",walkThreshold:"walk-threshold",roiReach:"roi-reach",roiNullProbability:"roi-null-probability",polarValidMin:"polar-valid-min"};
     for (const [key, id] of Object.entries(numbers)) if (quality[key] != null) byId(id).value = quality[key];
     if (Array.isArray(quality.polarR)) { byId("polar-r-min").value = quality.polarR[0]; byId("polar-r-max").value = quality.polarR[1]; }
@@ -1466,8 +1494,10 @@ function handleWorkerMessage(event) {
       clearTransitionSelection();
       return;
     }
+    const flight = match?.flightStatus == null ? "" : ` · ${["flight unmeasured", "not flying", "flying"][match.flightStatus]}${
+      Number.isFinite(match.flightFraction) ? ` · ${formatNumber(match.flightFraction * 100, 1)}% of trial flying` : ""}`;
     byId("segment-inspector").textContent = match
-      ? `${match.sourceFile} · replicate ${formatNumber(match.replicate, 0)} · trial ${formatNumber(match.trial, 0)} / step ${formatNumber(match.step, 0)} · ${match.config} · ${match.fly}@${match.vr} · path ${formatNumber(match.distance, 1)}, displacement ${formatNumber(match.displacement, 1)}, peak ${formatNumber(match.peakSpeed, 1)}, median ${formatNumber(match.medianSpeed, 1)}, tortuosity ${formatNumber(match.tortuosity, 1)}`
+      ? `${match.sourceFile} · replicate ${formatNumber(match.replicate, 0)} · trial ${formatNumber(match.trial, 0)} / step ${formatNumber(match.step, 0)} · ${match.config} · ${match.fly}@${match.vr} · path ${formatNumber(match.distance, 1)}, displacement ${formatNumber(match.displacement, 1)}, peak ${formatNumber(match.peakSpeed, 1)}, median ${formatNumber(match.medianSpeed, 1)}, tortuosity ${formatNumber(match.tortuosity, 1)}${flight}`
       : "No retained path was close enough; click nearer a visible line.";
     return;
   }
@@ -1958,6 +1988,10 @@ function applyRecipeControls(recipe) {
     transitionAxis:"transition-axis", mirrorAxis:"mirror-axis", mirrorCoordinate:"mirror-coordinate",
   };
   for (const [key, id] of Object.entries(valueIds)) if (state[key] != null) byId(id).value = state[key];
+  byId("flight-only").checked = state.flightOnly === true;
+  byId("minimum-flight-percent").value = state.minimumFlightPercent ?? 80;
+  byId("flight-variance-threshold").value = state.flightVarianceThreshold ?? "";
+  syncFlightControls();
   syncAngleSourceControls(byId("angle-source").value);
   for (const [key, id] of Object.entries({movingOnly:"moving-only",mirrorPool:"mirror-pool",roiEntered:"roi-entered",roiTrim:"roi-trim",ringEnabled:"ring-enabled",ringContext:"ring-context",windowsVisible:"window-show",showMarginals:"show-marginals"})) {
     if (state[key] != null && !(id === "mirror-pool" && byId(id).disabled)) byId(id).checked = !!state[key];
@@ -2690,7 +2724,16 @@ installDevicePixelRatioWatcher();
 
 for (const control of document.querySelectorAll("[data-scope]")) {
   control.addEventListener("change", () => {
-    const scope = control.dataset.scope;
+    let scope = control.dataset.scope;
+    if (control.id === "minimum-flight-percent") {
+      control.value = Math.min(100, Math.max(0, optionalNumber(control.id) ?? 80));
+      if (!byId("flight-only").checked) { persistState(); return; }
+    }
+    if (scope === "flight") {
+      const threshold = optionalNumber(control.id);
+      control.value = threshold == null ? "" : Math.max(0, threshold);
+      scope = byId("flight-only").checked ? "full" : "color";
+    }
     if (scope === "layout") { updateColumns(); persistState(); return; }
     const hadPendingWork = workerBusy || !!pendingCompute || !!scheduledScope;
     cancelPendingReport();

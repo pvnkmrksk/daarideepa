@@ -56,6 +56,97 @@ def worker(script: str, payload: bytes | None = None):
     return json.loads(result.stdout)
 
 
+def _write_flight_recording(path, states, variances, *, times=None):
+    states = np.asarray(states, dtype=object)
+    sample_count = states.shape[-1]
+    pd.DataFrame({
+        "Current Time": np.tile(pd.Timestamp("2026-01-01") + pd.to_timedelta(
+            np.arange(sample_count) / 10 if times is None else times, unit="s"), len(states)),
+        "CurrentTrial": np.repeat(np.arange(len(states)), sample_count),
+        "CurrentStep": 0, "GameObjectPosX": np.tile(np.arange(sample_count), len(states)),
+        "GameObjectPosZ": 2, "GameObjectRotY": 15,
+        "flightDetected": states.ravel(),
+        "flightVarianceRadiansSquared": np.asarray(variances).ravel(),
+        "flightThresholdRadiansSquared": .01,
+    }).to_csv(path, index=False)
+
+
+def test_flight_gates_complete_trials_in_plots_and_metrics_and_reclassifies_on_override(tmp_path):
+    _write_flight_recording(
+        tmp_path / "flight_VR1_.csv.gz",
+        [["True"] * 8 + ["False"] * 3, ["True"] * 7 + [False] * 4, [None] * 11],
+        [[.01] * 11, [.03] * 11, [np.nan] * 11],
+    )
+    dataset = load_native_dataset(str(tmp_path))
+    assert dataset.header["flight"] == {"recorded": True, "variance": True}
+    actual = worker("""
+      initDataset({header:payloadHeader,buffer:binary,bodyOffset:payloadBodyOffset});
+      const state = { groupBy:"all", colorBy:"flight", flightOnly:true, headingMode:"trial" };
+      function analyze(scope, extra={}) {
+        compute({state:{...state,...extra},scope,requestId:1});
+        return messages.at(-1);
+      }
+      const paths = analyze("trajectory");
+      const metrics = analyze("metrics");
+      const override = analyze("trajectory", {flightVarianceThreshold:.01});
+      const inspection = (() => {
+        inspectPoint({panel:0,x:3,z:2,tolerance:.1,requestId:1});
+        return messages.at(-1).match;
+      })();
+      const all = analyze("heading", {flightOnly:false});
+      const overriddenHeading = analyze("heading", {flightOnly:false,flightVarianceThreshold:.01});
+      const lenient = analyze("metrics", {minimumFlightPercent:70});
+      const behind = analyze("metrics", {ranges:{time:[.8,1]}});
+      [paths.summary.visibleRows, paths.products.trajectory.segmentLabels,
+       paths.products.trajectory.colors, metrics.products.metrics.trial,
+       override.products.trajectory.segmentLabels, inspection.flightFraction,
+       [...new Set(all.products.heading.colors)], [...new Set(overriddenHeading.products.heading.colors)],
+       lenient.products.metrics.trial, behind.products.metrics.trial];
+    """, dataset.binary)
+    assert actual[0] == 11
+    assert ["trial 0" in (label or "") for label in actual[1]] == [True, False, False]
+    assert actual[2] == [57] * 16 + [56] * 4
+    assert actual[3] == [0]
+    assert ["trial 1" in (label or "") for label in actual[4]] == [False, True, False]
+    assert actual[5] == pytest.approx(1)
+    assert set(actual[6]) == set(actual[7]) == {20, 56, 57}
+    assert actual[8:] == [[0, 1], [0]]
+
+
+def test_flight_fraction_uses_elapsed_time_and_saved_decision_survives_retention(tmp_path, monkeypatch):
+    from native_dashboard import dataset as native_dataset
+
+    monkeypatch.setattr(native_dataset, "LOAD_ROW_BUDGET", 2)
+    _write_flight_recording(
+        tmp_path / "flight_VR1_.csv",
+        [[True, False, None, True, False]], [[.025, .02, np.nan, .05, .02]],
+        times=[0, .6, .7, 2, 2.2],
+    )
+    dataset = load_native_dataset(str(tmp_path))
+    observed = worker("""
+      initDataset({header:payloadHeader,buffer:binary,bodyOffset:payloadBodyOffset});
+      [data.segmentFlightFraction[0], data.flightVarianceSeconds, data.flightStatus];
+    """, dataset.binary)
+    # 0.6 + 0.2 flying seconds out of 2.2. The 1.3-second recording gap is unknown.
+    assert dataset.header["counts"]["retainedRows"] == 2
+    assert observed[0] == pytest.approx(.8 / 2.2)
+    assert observed[1] == pytest.approx([.9, 0])
+    assert observed[2] == [2, 1]
+
+
+def test_legacy_recording_has_no_flight_controls_or_payload():
+    dataset = load_native_dataset(str(ROOT / "examples/demo"))
+    assert dataset.header["flight"] == {}
+    actual = worker("""
+      initDataset({header:payloadHeader,buffer:binary,bodyOffset:payloadBodyOffset});
+      compute({state:{groupBy:"all",flightOnly:true,colorBy:"tortuosity"},scope:"trajectory"});
+      const result = messages.at(-1);
+      [result.summary.visibleSegments, result.products.trajectory.colorScale.hi, header.ranges.distance[1]];
+    """, dataset.binary)
+    assert actual[0] == dataset.header["counts"]["segments"]
+    assert 1 < actual[1] < actual[2]
+
+
 def test_exact_binomial_and_confidence_intervals_match_scipy():
     cases = [(0, 1, .5), (1, 1, .5), (2, 10, .5), (8, 10, .3),
              (1000, 5000, .5), (4900, 10000, .49), (0, 100000, .00001),

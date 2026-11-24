@@ -3,6 +3,11 @@
 const NEUTRAL_INDEX = 20;
 const SEQUENTIAL_OFFSET = 24;
 const CATEGORY_COLORS = 16;
+const FLIGHT_COLORS = [NEUTRAL_INDEX, 56, 57];
+const DEFAULT_MINIMUM_FLIGHT = 80;
+const DEFAULT_TORTUOSITY_RANGE = [1, 2];
+let currentFlight = null;
+let overrideFlight = null;
 let header = null;
 let sourceBuffer = null;
 let bodyOffset = 0;
@@ -71,6 +76,8 @@ function unpack(headerValue, buffer) {
 
 function initDataset(message) {
   analyticalProductCache.clear();
+  currentFlight = null;
+  overrideFlight = null;
   lastPooledSource = null; lastPooledAnalysis = null; lastPooledPanelKey = "";
   lastBaseAnalysis = null; lastAnalysis = null;
   lastAnalysisKey = ""; lastCurtainKey = ""; lastPanelKey = "";
@@ -160,6 +167,42 @@ function stablePanelKeys(state, labels, visibleCategories) {
   return ordered;
 }
 
+function flightThreshold(state) {
+  const threshold = state.flightVarianceThreshold;
+  return Number.isFinite(threshold) && threshold >= 0 ? Math.fround(threshold) : null;
+}
+
+function minimumFlight(state) {
+  const percent = state.minimumFlightPercent;
+  return Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : DEFAULT_MINIMUM_FLIGHT;
+}
+
+function selectFlight(state) {
+  if (!data.flightStatus) return null;
+  const threshold = flightThreshold(state);
+  if (threshold === null) return {status: data.flightStatus, fractions: data.segmentFlightFraction};
+  if (overrideFlight?.threshold === threshold) return overrideFlight;
+  const status = new Uint8Array(data.segment.length);
+  const fractions = new Float64Array(starts.length).fill(NaN);
+  const {flightVariance, flightVarianceSeconds, segmentDuration} = data;
+  if (flightVariance) {
+    for (let seg = 0; seg < starts.length; seg += 1) {
+      let measured = 0, flying = 0;
+      for (let row = starts[seg]; row < ends[seg]; row += 1) {
+        const variance = flightVariance[row];
+        if (!Number.isFinite(variance)) continue;
+        const seconds = flightVarianceSeconds[row];
+        measured += seconds;
+        if (variance > threshold) { status[row] = 2; flying += seconds; }
+        else status[row] = 1;
+      }
+      if (measured > 0) fractions[seg] = Math.min(1, flying / segmentDuration[seg]);
+    }
+  }
+  overrideFlight = {threshold, status, fractions};
+  return overrideFlight;
+}
+
 function analysisKey(state) {
   return JSON.stringify({
     filters: state.filters, ranges: state.ranges,
@@ -170,6 +213,8 @@ function analysisKey(state) {
     jumpThreshold: state.jumpThreshold, jumpBufferMs: state.jumpBufferMs,
     minDisplacement: state.minDisplacement, edgeTrim: state.edgeTrim,
     roiReach: state.roiReach, roiEntered: state.roiEntered, roiTrim: state.roiTrim,
+    flight: state.flightOnly && data.flightStatus
+      ? [minimumFlight(state), flightThreshold(state)] : null,
   });
 }
 
@@ -403,6 +448,19 @@ function buildAnalysis(state) {
       if (segmentKeep[seg] && !inRange(field[seg], range)) segmentKeep[seg] = 0;
     }
     audit(label, rangeText(range), segmentKeep);
+  }
+
+  if (state.flightOnly && data.flightStatus) {
+    const minimum = minimumFlight(state);
+    for (let seg = 0; seg < ns; seg += 1) {
+      const fraction = currentFlight.fractions[seg];
+      // Round-off from the packed time/ratio columns must not reject a trial
+      // exactly on the inclusive percentage boundary.
+      if (!(fraction + 1e-7 >= minimum / 100)) segmentKeep[seg] = 0;
+    }
+    const threshold = flightThreshold(state) === null
+      ? "saved flight state" : `variance > ${state.flightVarianceThreshold} rad²`;
+    audit("Flight time", `At least ${minimum}% flying · ${threshold}`, segmentKeep);
   }
 
   const rowKeep = new Uint8Array(data.segment.length);
@@ -844,6 +902,10 @@ function experimentOrderedSegments(segments) {
   });
 }
 
+function tortuosityColorRange() {
+  return header.ranges.tortuosity || DEFAULT_TORTUOSITY_RANGE;
+}
+
 function colorScaleFor(state) {
   // Match sequentialIndex() ranges so the bar labels the same mapping as path colours.
   switch (state.colorBy) {
@@ -863,9 +925,8 @@ function colorScaleFor(state) {
         title: "Speed", integer: false};
     }
     case "tortuosity":
-      return {mode: "tortuosity", lo: 1,
-        hi: Math.max(2, Number((header.ranges.distance || [0, 2])[1]) || 2),
-        title: "Tortuosity", integer: false};
+      return {mode: "tortuosity", lo: tortuosityColorRange()[0],
+        hi: tortuosityColorRange()[1], title: "Tortuosity", integer: false};
     default:
       return null;
   }
@@ -886,7 +947,9 @@ function rowColor(row, seg, state, analysis) {
     case "replicate": return sequentialIndex(data.segmentReplicate[seg], header.ranges.replicate);
     case "time": return sequentialIndex(data.time[row], header.ranges.time);
     case "speed": return sequentialIndex(data.speed[row], header.ranges.speed);
-    case "tortuosity": return sequentialIndex(data.tortuosity[row], [1, Math.max(2, header.ranges.distance[1])]);
+    case "flight": return FLIGHT_COLORS[currentFlight?.status[row] || 0];
+    case "tortuosity": return Number.isFinite(data.tortuosity[row])
+      ? sequentialIndex(data.tortuosity[row], tortuosityColorRange()) : NEUTRAL_INDEX;
     default: return Math.max(0, analysis.segmentPanel[seg]) % CATEGORY_COLORS;
   }
 }
@@ -946,7 +1009,7 @@ function buildTrajectory(state, analysis) {
           vertices[v + 2] = activeX[i]; vertices[v + 3] = activeZ[i];
           panels[a] = analysis.segmentPanel[seg]; panels[a + 1] = analysis.segmentPanel[seg];
           colors[a] = rowColor(previous, seg, state, analysis);
-          colors[a + 1] = rowColor(i, seg, state, analysis);
+          colors[a + 1] = state.colorBy === "flight" ? colors[a] : rowColor(i, seg, state, analysis);
           animals[a] = data.segmentAnimal[seg]; animals[a + 1] = data.segmentAnimal[seg];
           segments[a] = seg; segments[a + 1] = seg;
           times[a] = data.time[previous]; times[a + 1] = data.time[i];
@@ -1195,6 +1258,8 @@ function segmentMeanMetric(seg, analysis, getter, movingOnly, walkThreshold) {
 function unitColor(seg, state, analysis, metricMean = NaN) {
   const walkThreshold = Number(state.walkThreshold) || 0;
   switch (state.colorBy) {
+    // A polar resultant summarizes the entire trial. Keep its treatment colour.
+    case "flight": return Math.max(0, analysis.segmentPanel[seg]) % CATEGORY_COLORS;
     case "speed": {
       const mean = Number.isFinite(metricMean)
         ? metricMean
@@ -1206,7 +1271,7 @@ function unitColor(seg, state, analysis, metricMean = NaN) {
         ? metricMean
         : segmentMeanMetric(seg, analysis, row => data.tortuosity[row], state.movingOnly, walkThreshold);
       return Number.isFinite(mean)
-        ? sequentialIndex(mean, [1, Math.max(2, header.ranges.distance[1])])
+        ? sequentialIndex(mean, tortuosityColorRange())
         : NEUTRAL_INDEX;
     }
     case "time": {
@@ -1471,7 +1536,8 @@ function buildHeading(state, analysis) {
         if (previous >= 0 && Math.abs(a - previousAngle) <= 180) {
           vertices.push(data.time[previous], previousAngle, data.time[row], a);
           panels.push(analysis.segmentPanel[seg], analysis.segmentPanel[seg]);
-          colors.push(color, color); samples.push(sample, sample);
+          const linkColor = state.colorBy === "flight" ? rowColor(previous, seg, state, analysis) : color;
+          colors.push(linkColor, linkColor); samples.push(sample, sample);
           animals.push(data.segmentAnimal[seg], data.segmentAnimal[seg]);
           trials.push(data.segmentTrial[seg], data.segmentTrial[seg]);
           steps.push(data.segmentStep[seg], data.segmentStep[seg]);
@@ -1483,6 +1549,7 @@ function buildHeading(state, analysis) {
   }
   return {
     mode,
+    colorBy: state.colorBy,
     vertices: Float32Array.from(vertices), panels: Uint16Array.from(panels),
     colors: Uint8Array.from(colors), samples: Float32Array.from(samples),
     animals: Uint16Array.from(animals), trials: Float32Array.from(trials),
@@ -2152,6 +2219,9 @@ function cachedProduct(name, analysis, key, builder) {
 function compute(message) {
   const {state, requestId} = message;
   selectCoordinateFrame(state);
+  currentFlight = state.flightOnly || state.colorBy === "flight" || flightThreshold(state) !== null
+    ? selectFlight(state)
+    : data.flightStatus ? {status: data.flightStatus, fractions: data.segmentFlightFraction} : null;
   const key = analysisKey(state);
   const ringKey = curtainKey(state);
   const layoutKey = panelKey(state);
@@ -2202,7 +2272,7 @@ function compute(message) {
     products.heading = cachedProduct("heading", productAnalysis, JSON.stringify([
       state.angleSource, state.movingOnly, state.walkThreshold, state.headingMode,
       state.headingBin, state.headingSectors, state.colorBy, state.sampleSeed,
-      state.panelColumns, state.playbackPercentile,
+      state.panelColumns, state.playbackPercentile, state.colorBy === "flight" ? flightThreshold(state) : null,
     ]), () => buildHeading(state, productAnalysis));
   }
   if (["full", "statistics", "metrics", "background"].includes(scope)) {
@@ -2297,6 +2367,8 @@ function inspectPoint(message) {
       points: data.segmentPoints[seg], distance: data.segmentDistance[seg],
       displacement: data.segmentDisplacement[seg], peakSpeed: data.segmentPeakSpeed[seg],
       medianSpeed: data.segmentMedianSpeed[seg], tortuosity: data.segmentTortuosity[seg],
+      flightStatus: currentFlight?.status[bestRow],
+      flightFraction: currentFlight?.fractions[seg],
     },
   });
 }

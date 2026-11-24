@@ -531,10 +531,12 @@ def _load_reference_dataset(pattern: str):
         frame["_smoothed_velocity"] = np.asarray(speed, dtype=np.float32)
         frame["_raw_velocity"] = np.asarray(raw_speed, dtype=np.float32)
         frame["_local_tortuosity"] = np.asarray(tortuosity, dtype=np.float32)
+        keep = None
         if quota and len(frame) > quota:
-            frame = frame.loc[
-                _segment_endpoint_keep(frame["_seg_id"].to_numpy(), quota)
-            ].copy()
+            keep = _segment_endpoint_keep(frame["_seg_id"].to_numpy(), quota)
+        _prepare_flight(frame, stats, keep)
+        if keep is not None:
+            frame = frame.loc[keep].copy()
         else:
             frame = frame.copy()
         for column in frame.select_dtypes(include=["float64"]).columns:
@@ -590,6 +592,57 @@ def _load_reference_dataset(pattern: str):
         LOAD_ROW_BUDGET,
     )
     return frame, stats, metadata
+
+
+def _prepare_flight(frame: pd.DataFrame, stats: pd.DataFrame, keep: np.ndarray | None) -> None:
+    """Pack recorded states and flight time over the full sorted segments."""
+    if not any(column in frame for column in td_io.FLIGHT_COLUMNS[:2]):
+        return
+    labels = frame["_seg_id"].to_numpy()
+    starts, ends = _segment_boundaries(labels)
+    times = frame["Current Time"].to_numpy(dtype="datetime64[ns]").view("int64")
+    duration = (times[ends - 1] - times[starts]) / 1e9
+    span = np.zeros(len(frame))
+    span[:-1] = np.diff(times) / 1e9
+    span[ends - 1] = 0
+    # MATREX clears detector evidence after a one-second input gap.
+    span[(span <= 0) | (span > 1)] = 0
+
+    variance = None
+    if "flightVarianceRadiansSquared" in frame:
+        variance = _finite_float(frame["flightVarianceRadiansSquared"]).copy()
+        variance[(variance < 0) | ~np.isfinite(variance)] = np.nan
+    if "flightDetected" in frame:
+        values = frame["flightDetected"]
+        if pd.api.types.is_bool_dtype(values.dtype):
+            status = 1 + values.to_numpy(dtype=np.uint8)
+        else:
+            names = values.astype("string").str.strip().str.lower()
+            status = names.map({"true": 2, "false": 1, "1": 2, "0": 1,
+                                "1.0": 2, "0.0": 1}).fillna(0).to_numpy(dtype=np.uint8)
+    else:
+        threshold = .01
+        if "flightThresholdRadiansSquared" in frame:
+            thresholds = _finite_float(frame["flightThresholdRadiansSquared"])
+            threshold = np.where(np.isfinite(thresholds) & (thresholds >= 0), thresholds, .01)
+        status = np.where(np.isfinite(variance), 1 + (variance > threshold), 0).astype(np.uint8)
+
+    observed = np.add.reduceat(span * (status != 0), starts)
+    flying = np.add.reduceat(span * (status == 2), starts)
+    fractions = np.divide(flying, duration, out=np.full(len(starts), np.nan),
+                          where=observed > 0)
+    stats["_flight_fraction"] = stats["seg_id"].map(pd.Series(fractions, index=labels[starts]))
+    frame["_flight_status"] = status
+    if variance is not None:
+        frame["_flight_variance"] = variance
+        # Represent each retained interval using its first sample's variance.
+        # Carry forward only time with measured variance in the source interval.
+        weights = span * np.isfinite(variance)
+        if keep is not None:
+            kept = np.flatnonzero(keep)
+            weights[kept] = np.add.reduceat(weights, kept)
+        frame["_flight_variance_seconds"] = weights.astype(np.float32)
+    frame.drop(columns=list(td_io.FLIGHT_COLUMNS), errors="ignore", inplace=True)
 
 
 def _build_native_dataset(pattern: str, source_signature=None) -> NativeDataset:
@@ -749,6 +802,21 @@ def _build_native_dataset(pattern: str, source_signature=None) -> NativeDataset:
     for key, codes in category_codes.items():
         arrays[f"segment{key[:1].upper()}{key[1:]}"] = codes
     arrays["segmentMirrorSign"] = segment_mirror_sign
+    flight = {}
+    if "_flight_status" in frame:
+        status = frame["_flight_status"].fillna(0).to_numpy(dtype=np.uint8)
+        variance = (_finite_float(frame["_flight_variance"])
+                    if "_flight_variance" in frame else None)
+        has_variance = variance is not None and np.isfinite(variance).any()
+        fractions = _stats_by_segment(stats, segment_ids, "_flight_fraction", np.nan)
+        if status.any() or has_variance or np.isfinite(fractions).any():
+            arrays.update(flightStatus=status, segmentFlightFraction=fractions)
+            if has_variance:
+                arrays.update(flightVariance=variance, flightVarianceSeconds=(
+                    frame["_flight_variance_seconds"].fillna(0).to_numpy(dtype=np.float32)
+                ))
+            flight = {"recorded": bool(status.any() or np.isfinite(fractions).any()),
+                      "variance": bool(has_variance)}
 
     token = repr(frame.attrs.get("_frame_token", (pattern, len(frame))))
     dataset_id = hashlib.sha1(
@@ -763,6 +831,8 @@ def _build_native_dataset(pattern: str, source_signature=None) -> NativeDataset:
         "max": float(np.max(finite_durations)) if finite_durations.size else 0.0,
     }
     playback_max = duration_quantiles["p95"]
+    finite_tortuosity = local_tortuosity[np.isfinite(local_tortuosity)]
+    tortuosity_max = max(1.05, float(np.percentile(finite_tortuosity, 99))) if finite_tortuosity.size else 2
     display_categories = {
         key: ([_display_config(value, rois.get(value, [])) for value in labels]
               if key == "config" else list(labels))
@@ -773,6 +843,7 @@ def _build_native_dataset(pattern: str, source_signature=None) -> NativeDataset:
         "replayTimeline": {"clock": "recorded-wallclock-ticks",
                            "originTicks": str(wall_origin // 100 + 621355968000000000)},
         "pattern": pattern,
+        "flight": flight,
         "counts": {
             "files": int(frame["SourceFile"].nunique()),
             "discoveredFiles": int(frame.attrs.get("_discovered_files", frame["SourceFile"].nunique())),
@@ -798,6 +869,7 @@ def _build_native_dataset(pattern: str, source_signature=None) -> NativeDataset:
             "peakSpeed": _range(arrays["segmentPeakSpeed"], (0.0, 1.0)),
             "displacement": _range(arrays["segmentDisplacement"], (0.0, 1.0)),
             "distance": _range(arrays["segmentDistance"], (0.0, 1.0)),
+            "tortuosity": [1.0, tortuosity_max],
         },
         "playbackMax": playback_max,
         "playbackQuantiles": duration_quantiles,

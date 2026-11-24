@@ -31,6 +31,8 @@ const PALETTE = Array.from({length: 64}, (_, i) => {
   return CATEGORICAL[i % CATEGORICAL.length];
 });
 PALETTE[NEUTRAL_INDEX] = "#7f8985";
+PALETTE[56] = "#bf5a37";
+PALETTE[57] = "#087d69";
 export const NATIVE_PALETTE = PALETTE;
 
 function hexRgb(color) {
@@ -1267,6 +1269,31 @@ export class TrajectoryRenderer extends SpatialBase {
         for (let panel = 0; panel < this.data.panelCount; panel += 1) {
           drawSequentialColorbar(this.ctx, panelPane(layout, panel), this.data.colorScale);
         }
+      }
+      if (!this.cleanMode && this.data.colorBy === "flight") {
+        const layout = panelLayout(this.width, this.height, this.data.panelCount, this.data.columns);
+        const pane = panelPane(layout, 0);
+        this.ctx.save();
+        this.ctx.font = "11px system-ui, sans-serif";
+        const entries = [[57, "Flying"], [56, "Not flying"], [NEUTRAL_INDEX, "Unmeasured"]];
+        const widths = entries.map(([, label]) => this.ctx.measureText(label).width + 23);
+        const width = widths.reduce((a, b) => a + b, 0) + 8;
+        const stacked = width > pane.width;
+        const left = stacked ? pane.left : Math.max(pane.left, pane.right - width);
+        const top = pane.top + 6;
+        this.ctx.fillStyle = "rgba(255,255,255,.92)";
+        this.ctx.fillRect(left, top, stacked ? Math.max(...widths) + 8 : width, stacked ? 56 : 22);
+        let x = left + 6, y = top + 11;
+        this.ctx.textBaseline = "middle";
+        for (const [index, [color, label]] of entries.entries()) {
+          this.ctx.fillStyle = PALETTE[color];
+          this.ctx.fillRect(x, y - 2, 10, 4);
+          this.ctx.fillStyle = "#26332f";
+          this.ctx.fillText(label, x + 14, y);
+          if (stacked) y += 17;
+          else x += widths[index];
+        }
+        this.ctx.restore();
       }
     }
   }

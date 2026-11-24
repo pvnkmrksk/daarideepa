@@ -26,3 +26,5 @@ See the [live telemetry guide](LIVE_TELEMETRY.md) for addresses, connection setu
 ## Source and development
 
 [Install from source](docs/install.md#install-from-source) · [Native architecture](NATIVE_ARCHITECTURE.md) · [Legacy Dash interface and pipeline](LEGACY_DASH.md) · [Build checks](https://github.com/pvnkmrksk/daarideepa/actions/workflows/native-build.yml)
+
+Use the [recorded flight controls](docs/manual.md#recorded-flight) with MATREX CSVs that include flight telemetry. To benchmark the worker on a local recording, run `python -m scripts.benchmark_native "/path/to/recordings"` with Node.js available. The command keeps its binary payload in a temporary directory.

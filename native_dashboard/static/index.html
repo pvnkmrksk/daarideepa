@@ -85,6 +85,7 @@
               <option value="replicate">Replicate order</option>
               <option value="time">Local time</option>
               <option value="speed">Velocity</option>
+              <option value="flight" disabled>Flight state</option>
               <option value="tortuosity">Tortuosity</option>
             </select>
           </label>
@@ -138,6 +139,16 @@
           <label>Buffer (ms)<input id="jump-buffer" data-scope="full" type="number" min="0" step="10" value="100"></label>
           <label>Min displacement<input id="min-displacement" data-scope="full" type="number" min="0" step="0.001" value="0"></label>
           <label>Trim each edge<input id="edge-trim" data-scope="full" type="number" min="0" step="1" value="0"></label>
+        </div>
+      </details>
+
+      <details class="control-card" id="flight-controls" hidden>
+        <summary>Flight</summary>
+        <div class="control-body two-up">
+          <label class="check span-two"><input id="flight-only" data-scope="full" type="checkbox"> Filter by trial flight time</label>
+          <label>Minimum flying (%)<input id="minimum-flight-percent" data-scope="full" type="number" min="0" max="100" step="1" value="80"></label>
+          <label>Variance override (rad²)<input id="flight-variance-threshold" data-scope="flight" type="number" min="0" step="any" placeholder="Use saved state" aria-describedby="flight-help"></label>
+          <p class="control-note span-two" id="flight-help"></p>
         </div>
       </details>
 
